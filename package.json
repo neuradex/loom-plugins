@@ -1,0 +1,27 @@
+{
+  "name": "loom-plugins",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22.13.0"
+  },
+  "scripts": {
+    "build": "node scripts/build-memory-plugin.mjs",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "validate": "node scripts/validate.mjs",
+    "check": "npm run typecheck && npm test && npm run build && npm run validate && npm run smoke",
+    "smoke": "node scripts/smoke.mjs"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "zod": "4.4.3"
+  },
+  "devDependencies": {
+    "@types/node": "22.19.11",
+    "esbuild": "0.28.2",
+    "typescript": "5.9.3",
+    "vitest": "4.1.10"
+  }
+}

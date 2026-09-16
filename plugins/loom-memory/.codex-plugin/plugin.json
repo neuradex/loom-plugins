@@ -1,0 +1,22 @@
+{
+  "name": "loom-memory",
+  "version": "0.1.0",
+  "description": "Automatically capture coding experiences and recall Loom memory.",
+  "author": {
+    "name": "Neuradex"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Loom Memory",
+    "shortDescription": "Use Loom Memory in Codex.",
+    "longDescription": "Capture complete available session records, batch them to Loom, and recall relevant memories while coding.",
+    "developerName": "Neuradex",
+    "category": "Productivity",
+    "capabilities": [
+      "Read",
+      "Write"
+    ],
+    "defaultPrompt": "Help me use Loom Memory."
+  },
+  "mcpServers": "./.mcp.json"
+}

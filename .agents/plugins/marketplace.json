@@ -1,0 +1,20 @@
+{
+  "name": "loom-plugins",
+  "interface": {
+    "displayName": "Loom Plugins"
+  },
+  "plugins": [
+    {
+      "name": "loom-memory",
+      "source": {
+        "source": "local",
+        "path": "./plugins/loom-memory"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

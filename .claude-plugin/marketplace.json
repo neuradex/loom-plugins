@@ -1,0 +1,17 @@
+{
+  "name": "loom-plugins",
+  "owner": {
+    "name": "Neuradex"
+  },
+  "plugins": [
+    {
+      "name": "loom-memory",
+      "source": "./plugins/loom-memory",
+      "description": "Automatic experience capture and memory recall for Loom.",
+      "version": "0.1.0"
+    }
+  ],
+  "metadata": {
+    "description": "Loom memory capture and recall plugins for coding agents."
+  }
+}

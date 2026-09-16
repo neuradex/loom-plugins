@@ -1,0 +1,25 @@
+# Merge into your existing Codex config; do not overwrite other hook entries.
+# Replace /absolute/path/to/loom-memory with the built plugin directory.
+# Configure enrollment first with: node <plugin>/dist/cli.js configure
+
+[features]
+hooks = true
+
+[mcp_servers.loom_memory]
+command = "node"
+args = ["/absolute/path/to/loom-memory/dist/cli.js", "mcp"]
+
+[mcp_servers.loom_memory.tools.report_memory_use]
+approval_mode = "approve"
+
+[[hooks.SessionStart]]
+hooks = [{ type = "command", command = 'node "/absolute/path/to/loom-memory/dist/cli.js" hook', timeout = 12 }]
+
+[[hooks.UserPromptSubmit]]
+hooks = [{ type = "command", command = 'node "/absolute/path/to/loom-memory/dist/cli.js" hook', timeout = 12 }]
+
+[[hooks.Stop]]
+hooks = [{ type = "command", command = 'node "/absolute/path/to/loom-memory/dist/cli.js" hook', timeout = 12 }]
+
+[[hooks.SessionEnd]]
+hooks = [{ type = "command", command = 'node "/absolute/path/to/loom-memory/dist/cli.js" hook', timeout = 3 }]
