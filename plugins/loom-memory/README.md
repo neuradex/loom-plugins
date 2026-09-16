@@ -53,20 +53,7 @@ Start a new session after configuring. This plugin bundles its MCP server and ho
 
 The verified path on Codex 0.154.0 is explicit MCP and hook configuration: merge [codex-config.example.toml](codex-config.example.toml) into your Codex configuration, replacing every placeholder path. Preserve existing hook entries when merging. Configure the same `LOOM_MEMORY_HOME` for the MCP server and hook commands if you override the default. Review and trust these hooks through Codex before starting a new session. The example permits the narrowly scoped `report_memory_use` tool to stage feedback without another approval; other tools retain their normal policy.
 
-The package can also be registered in your local plugin marketplace. In the local test, the installed/enabled package did **not** expose its MCP tools or hooks to `codex exec`; package auto-loading is therefore not verified. An installed listing alone is insufficient. For package-loader investigation, register the built directory in your local plugin marketplace. The plugin has a `.codex-plugin/plugin.json` compatibility manifest, `.mcp.json`, `skills/` and default `hooks/hooks.json`. When registered as `loom-memory` in the standard `personal` marketplace, verify the source and install it with:
-
-```sh
-codex plugin list --marketplace personal --available --json
-codex plugin add loom-memory@personal
-```
-
-Codex requires review/trust of non-managed hooks in addition to enabling the plugin. Enable both the bundled MCP server and hooks; start a new thread. A web/cloud host must have the scripts and session records available in its execution environment; local installation does not deploy scripts to a remote host.
-
-The plugin creator's standard personal-marketplace helper can register the built directory. Installation formats and policies vary by host; official references:
-
-- [Codex plugins](https://developers.openai.com/plugins/build/plugins)
-- [Codex hooks and trust](https://learn.chatgpt.com/docs/hooks)
-- [Claude Code plugins](https://code.claude.com/docs/en/plugins-reference)
+The public repository includes both marketplace catalogs. Follow the [repository installation instructions](../../README.md#codex) for GitHub registration or the verified direct configuration path. Package auto-loading remains a separate compatibility check from successful download and installation. A remote host must have the scripts and transcript records in its own execution environment.
 
 ## Collection and graph growth
 

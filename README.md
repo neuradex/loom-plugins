@@ -89,7 +89,7 @@ For Claude Code, refresh the marketplace and update the plugin through `/plugin`
 - Prompt hooks offer memories; explicit usage reports feed back only after turn completion. Missing reports stay unknown.
 - Raw exposed records are retained, including unfamiliar record types. Hidden reasoning, unexposed host events and external attachment bytes are not promised.
 
-See [the detailed client contract](plugins/loom-memory/README.md) and [local live-test evidence](docs/LOCAL_TEST.md), including actual Claude/Codex sessions, vector retrieval, and a 20-user batch/replay test. Those tests do not establish production capacity or universal host compatibility.
+See [public installation verification](docs/INSTALL_TEST.md), [the detailed client contract](plugins/loom-memory/README.md) and [local live-test evidence](docs/LOCAL_TEST.md), including actual Claude/Codex sessions, vector retrieval, and a 20-user batch/replay test. Those tests do not establish production capacity or universal host compatibility.
 
 ## Development
 
