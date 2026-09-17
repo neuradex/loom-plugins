@@ -100,7 +100,7 @@ it("connects a fresh installed bundle once and keeps capture/recall/feedback aft
    const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
    const body = JSON.parse(Buffer.concat(chunks).toString());received.push({path:req.url!,body,graph:req.headers["x-loom-graph"] as string | undefined});
    res.setHeader("content-type","application/json");
-   if(req.url==="/mcp")res.end(JSON.stringify({jsonrpc:"2.0",id:body.id,result:{content:[{type:"text",text:JSON.stringify({graphs:[{kind:"personal",id:userId}]})}]}}));
+   if(req.url==="/mcp")res.end(JSON.stringify({jsonrpc:"2.0",id:body.id,result:{content:[{type:"text",text:JSON.stringify({graphs:[{kind:"personal",id:userId},{kind:"shared",id:"backend",slug:"acme/backend"},{kind:"shared",id:"frontend",slug:"acme/frontend"}]})}]}}));
    else if(req.url==="/retrieve")res.end(JSON.stringify({candidate_lines:['<knowledge id="7">prior lesson</knowledge>'],candidates:[{ref:"kn:7"}]}));
    else if(req.url==="/ingest/episodes/batch")res.end(JSON.stringify({results:body.episodes.map((ep:any)=>({idempotency_key:ep.idempotency_key}))}));
    else res.end(JSON.stringify({ok:true}));
@@ -138,6 +138,10 @@ it("connects a fresh installed bundle once and keeps capture/recall/feedback aft
  const input={cwd:dir,hook_event_name:"UserPromptSubmit",session_id:"fresh",transcript_path:transcript,prompt:"What was the prior lesson?"};
  const recalled=await hook(input);expect(recalled.systemMessage).toBeUndefined();
  const receipt=recalled.hookSpecificOutput.additionalContext.match(/Receipt: ([\w-]+)/)[1];
+ const switched = await client.callTool({name:"switch_graph",arguments:{receipt,graph:"acme/frontend"}});
+ expect(switched.isError).toBeUndefined();
+ expect(readFileSync(join(dir,".loom.yml"),"utf8")).toContain("graph: acme/frontend");
+ writeFileSync(transcript, readFileSync(transcript,"utf8") + JSON.stringify({type:"user",message:{role:"user",content:"experience after switch"}})+"\n");
  expect((await client.callTool({name:"report_memory_use",arguments:{receipt,picked:["kn:7"]}})).isError).toBeUndefined();
  await hook({...input,hook_event_name:"Stop"});
  await expect.poll(()=>received.filter(x=>x.path==="/ingest/picks").length,{timeout:5000}).toBe(1);
@@ -146,5 +150,12 @@ it("connects a fresh installed bundle once and keeps capture/recall/feedback aft
  const restarted=await openClient();
  const result=await restarted.callTool({name:"memory_status",arguments:{receipt}});
  expect(JSON.parse((result.content as any)[0].text)).toMatchObject({connection:"connected",account:userId,graph:"acme/backend",queue:{events:0}});
- for(const request of received.filter(x=>x.path!=="/mcp"))expect(request.graph).toBe("acme/backend");
+ await expect.poll(()=>received.filter(x=>x.path==="/ingest/episodes/batch" && x.graph==="acme/frontend").length,{timeout:5000}).toBe(1);
+ const batches=received.filter(x=>x.path==="/ingest/episodes/batch");
+ expect(batches.filter(x=>x.graph==="acme/backend").flatMap(x=>x.body.episodes).map(x=>x.content).join("")).not.toContain("experience after switch");
+ expect(batches.filter(x=>x.graph==="acme/frontend").flatMap(x=>x.body.episodes).map(x=>x.content).join("")).not.toContain("complete first experience");
+ expect(received.find(x=>x.path==="/ingest/picks")!.graph).toBe("acme/backend");
+ const nextTurn=await hook({...input,prompt:"What about now?"});
+ expect(nextTurn.systemMessage).toBeUndefined();
+ expect(received.filter(x=>x.path==="/retrieve").at(-1)!.graph).toBe("acme/frontend");
 },20000);

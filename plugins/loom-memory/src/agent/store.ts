@@ -16,7 +16,7 @@ export interface Episode {
 }
 export interface Source {
 	id: string; session: string; path: string; offset: number; identity: string;
-	segment: string; last_seen: number; ended: number; error: string | null; tail_hash: string;
+	segment: string; last_seen: number; ended: number; error: string | null; tail_hash: string; sealed: number;
 }
 export interface QueueRow { id: string; body: string; bytes: number; segment: string }
 
@@ -46,6 +46,12 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS project_sessions (session TEXT PRIMARY KEY, cwd TEXT NOT NULL, file TEXT, graph TEXT);
 			CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 		`);
+		if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) {
+			try { this.db.exec("ALTER TABLE sources ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0"); }
+			catch (error) { if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) throw error; }
+		}
+		this.db.exec("CREATE TABLE IF NOT EXISTS project_graphs (graph TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS graph_switches (session TEXT PRIMARY KEY, value TEXT NOT NULL)");
+
 	}
 	close(): void { this.db.close(); }
 	transaction<T>(fn: () => T): T {
@@ -78,6 +84,7 @@ export class Store {
 	/** Called inside the cursor transaction. Closed ingestion segments are immutable;
  * resumed host sessions get another segment while metadata retains the host id. */
 	append(source: Source, event: Omit<Episode, "session_id">): void {
+		if (source.sealed) throw new Error("This capture source belongs to an earlier graph segment.");
 		if (this.db.prepare("SELECT 1 FROM outbox WHERE id=?").get(event.idempotency_key)) return;
 		const closed = this.db.prepare("SELECT closed FROM segments WHERE id=?").get(source.segment);
 		if (closed?.closed) {

@@ -1,3 +1,5 @@
+import { captureLock } from "./capture-lock.js";
+import { registerGraphTools } from "./graphs.js";
 import { z } from "zod";
 import { dataHome, NotConnectedError } from "./config.js";
 import { completeConnection, connectionRequest } from "./auth.js";
@@ -18,6 +20,7 @@ export function createRuntime(home = dataHome(), fetcher = fetch) {
 			const current = selected.store;
 			if (current.config.oauth?.needsReconnect) return { ...current.status(), connection: "authentication_required", request: await connectionRequest(home) };
 			return { ...current.status(), ...readSettings(home, selected.project?.file), project: selected.project,
+				pendingSwitches: (await routing.base()).db.prepare("SELECT session FROM graph_switches").all(),
 				graphs: (await routing.all()).map(store => ({ graph: store.config.graph ?? "personal", ...store.status() })), connection: "connected", account: current.config.userId, graph: current.config.graph ?? "personal" };
 		} catch (error) {
 			if (error instanceof NotConnectedError) return { connection: "authentication_required", capture: false, request: await connectionRequest(home) };
@@ -25,6 +28,7 @@ export function createRuntime(home = dataHome(), fetcher = fetch) {
 		}
 	}
 	const server = createAgentServer(getStore, fetcher, status);
+	registerGraphTools(server, routing, fetcher);
 	server.registerTool("complete_connection", {
 		description: "Finish automatic Loom plugin setup using only the encrypted result of the remote connect_collector tool. Credentials are decrypted locally, verified against Loom, and saved privately. Capture and recall start automatically; no configure command or pasted token is needed.",
 		inputSchema: { encrypted: z.string().min(1).max(16_384) },
@@ -48,7 +52,7 @@ export function createRuntime(home = dataHome(), fetcher = fetch) {
 		async pump(force = false) {
 			if (busy) return;
 			busy = true;
-			try { for (const current of await routing.all()) { await drain(current, fetcher, force); await deliverUsage(current, fetcher); } }
+			try { await captureLock(home, () => routing.recover()); for (const current of await routing.all()) { await drain(current, fetcher, force); await deliverUsage(current, fetcher); } }
 			catch (error) { if (!(error instanceof NotConnectedError)) console.error("Loom collector is waiting for recovery; queued experience is retained."); }
 			finally { busy = false; }
 		},

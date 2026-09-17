@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { collectAll } from "./collector.js";
 import { Store } from "./store.js";
+import { captureLock } from "./capture-lock.js";
 import { accessToken } from "./auth.js";
 
 interface DeliveryState { retryAt: number; failures: number; lastSuccess: number; error?: string }
@@ -47,8 +48,7 @@ export async function drain(store: Store, fetcher = fetch, force = false): Promi
 	if (!claimed) return;
 	try {
 		if (!store.config.capture) return;
-		collectAll(store);
-		store.closeIdleSegments();
+		await captureLock(store.home, () => { collectAll(store); store.closeIdleSegments(); });
 		const state = store.get<DeliveryState>("delivery", { retryAt: 0, failures: 0, lastSuccess: 0 });
 		if (state.retryAt > Date.now()) return;
 		const rows = store.batch();

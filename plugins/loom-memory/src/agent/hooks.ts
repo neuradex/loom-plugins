@@ -79,7 +79,7 @@ export async function handleHook(store: Store, input: JsonRecord, fetcher = fetc
 	// negative feedback when its Stop hook was missed.
 	store.db.prepare("UPDATE receipts SET state='unknown' WHERE session=? AND state='open'").run(session);
 	const receipt = randomUUID();
-	const remoteSession = `agent-recall:${digest(session)}`;
+	const remoteSession = `agent-recall:${digest(JSON.stringify([session, store.config.graph ?? ""]))}`;
 	let workspace: { repo: string } | undefined;
 	if (typeof input.cwd === "string") {
 		try {
@@ -107,6 +107,7 @@ export async function handleHook(store: Store, input: JsonRecord, fetcher = fetc
 		}
 		store.db.prepare("INSERT INTO receipts(id,session,context,offered) VALUES (?,?,?,?)")
 			.run(receipt, session, input.prompt.slice(0, 4000), JSON.stringify(offered));
+		store.set(`recallSession:${receipt}`, remoteSession);
 		recordRecall(store);
 		const context = `${USAGE_GUIDANCE}\nReceipt: ${receipt}\n${lines.length ? lines.join("\n") : "No memories were offered on this turn."}`;
 		return { ...(captureError ? { systemMessage: captureError } : {}), hookSpecificOutput: { hookEventName: event, additionalContext: context } };

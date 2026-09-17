@@ -7250,7 +7250,7 @@ var require_public_api = __commonJS({
         return docs;
       return Object.assign([], { empty: true }, composer$1.streamInfo());
     }
-    function parseDocument(source, options = {}) {
+    function parseDocument2(source, options = {}) {
       const { lineCounter: lineCounter2, prettyErrors } = parseOptions(options);
       const parser$1 = new parser.Parser(lineCounter2?.addNewLine);
       const composer$1 = new composer.Composer(options);
@@ -7276,7 +7276,7 @@ var require_public_api = __commonJS({
       } else if (options === void 0 && reviver && typeof reviver === "object") {
         options = reviver;
       }
-      const doc = parseDocument(src, options);
+      const doc = parseDocument2(src, options);
       if (!doc)
         return null;
       doc.warnings.forEach((warning) => log.warn(doc.options.logLevel, warning));
@@ -7312,7 +7312,7 @@ var require_public_api = __commonJS({
     }
     exports.parse = parse5;
     exports.parseAllDocuments = parseAllDocuments;
-    exports.parseDocument = parseDocument;
+    exports.parseDocument = parseDocument2;
     exports.stringify = stringify;
   }
 });
@@ -14534,6 +14534,48 @@ var require_dist2 = __commonJS({
     exports.default = formatsPlugin;
   }
 });
+
+// plugins/loom-memory/src/agent/capture-lock.ts
+import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+async function captureLock(home, fn) {
+  const path = join(home, "capture.lock");
+  const deadline = Date.now() + 12e3;
+  await mkdir(home, { recursive: true, mode: 448 });
+  for (; ; ) {
+    try {
+      await mkdir(path, { mode: 448 });
+      await writeFile(join(path, "pid"), String(process.pid));
+      break;
+    } catch (error51) {
+      if (error51.code !== "EEXIST") throw error51;
+      let dead = false;
+      try {
+        const pid = Number(await readFile(join(path, "pid"), "utf8"));
+        if (Number.isInteger(pid) && pid > 0) {
+          try {
+            process.kill(pid, 0);
+          } catch (e) {
+            dead = e.code === "ESRCH";
+          }
+        }
+      } catch {
+        dead = await stat(path).then((s) => Date.now() - s.mtimeMs > 3e4).catch(() => false);
+      }
+      if (dead) {
+        await rm(path, { recursive: true, force: true });
+        continue;
+      }
+      if (Date.now() >= deadline) throw new Error("Loom capture is busy. Retry shortly; the queue and graph are retained.");
+      await new Promise((done) => setTimeout(done, 25));
+    }
+  }
+  try {
+    return await fn();
+  } finally {
+    await rm(path, { recursive: true, force: true });
+  }
+}
 
 // plugins/loom-memory/src/agent/cli.ts
 import { fileURLToPath } from "node:url";
@@ -30429,17 +30471,17 @@ var CompleteRequestSchema = RequestSchema.extend({
   method: literal("completion/complete"),
   params: CompleteRequestParamsSchema
 });
-function assertCompleteRequestPrompt(request) {
-  if (request.params.ref.type !== "ref/prompt") {
-    throw new TypeError(`Expected CompleteRequestPrompt, but got ${request.params.ref.type}`);
+function assertCompleteRequestPrompt(request2) {
+  if (request2.params.ref.type !== "ref/prompt") {
+    throw new TypeError(`Expected CompleteRequestPrompt, but got ${request2.params.ref.type}`);
   }
-  void request;
+  void request2;
 }
-function assertCompleteRequestResourceTemplate(request) {
-  if (request.params.ref.type !== "ref/resource") {
-    throw new TypeError(`Expected CompleteRequestResourceTemplate, but got ${request.params.ref.type}`);
+function assertCompleteRequestResourceTemplate(request2) {
+  if (request2.params.ref.type !== "ref/resource") {
+    throw new TypeError(`Expected CompleteRequestResourceTemplate, but got ${request2.params.ref.type}`);
   }
-  void request;
+  void request2;
 }
 var CompleteResultSchema = ResultSchema.extend({
   completion: looseObject({
@@ -30691,9 +30733,9 @@ var StdioServerTransport = class {
 };
 
 // plugins/loom-memory/src/agent/config.ts
-import { mkdir, readFile, writeFile, chmod, rename, rm } from "node:fs/promises";
+import { mkdir as mkdir2, readFile as readFile2, writeFile as writeFile2, chmod, rename, rm as rm2 } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { join as join2, resolve } from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 var configSchema = external_exports.object({
   token: external_exports.string().min(1),
@@ -30718,7 +30760,7 @@ var NotConnectedError = class extends Error {
 };
 var digest = (value) => createHash("sha256").update(value).digest("hex");
 function dataHome() {
-  return resolve(process.env.LOOM_MEMORY_HOME ?? join(homedir(), ".loom", "agent-memory"));
+  return resolve(process.env.LOOM_MEMORY_HOME ?? join2(homedir(), ".loom", "agent-memory"));
 }
 function validateConfig(value) {
   const config2 = configSchema.parse(value);
@@ -30733,7 +30775,7 @@ function validateConfig(value) {
 async function readConfig(home = dataHome()) {
   let value;
   try {
-    value = JSON.parse(await readFile(join(home, "config.json"), "utf8"));
+    value = JSON.parse(await readFile2(join2(home, "config.json"), "utf8"));
   } catch (error51) {
     if (error51.code === "ENOENT") {
       throw new NotConnectedError();
@@ -30744,17 +30786,17 @@ async function readConfig(home = dataHome()) {
 }
 async function saveConfig(value, home = dataHome()) {
   const config2 = validateConfig(value);
-  await mkdir(home, { recursive: true, mode: 448 });
-  await atomicJson(join(home, "config.json"), config2);
+  await mkdir2(home, { recursive: true, mode: 448 });
+  await atomicJson(join2(home, "config.json"), config2);
 }
 async function atomicJson(path, value) {
   const temporary = `${path}.${randomUUID()}.tmp`;
   try {
-    await writeFile(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 384, flag: "wx" });
+    await writeFile2(temporary, JSON.stringify(value, null, 2) + "\n", { mode: 384, flag: "wx" });
     await chmod(temporary, 384);
     await rename(temporary, path);
   } finally {
-    await rm(temporary, { force: true });
+    await rm2(temporary, { force: true });
   }
 }
 function accountKey(config2) {
@@ -30766,7 +30808,7 @@ function credentialKey(config2) {
 
 // plugins/loom-memory/src/agent/hooks.ts
 import { execFileSync, spawn } from "node:child_process";
-import { randomUUID as randomUUID4 } from "node:crypto";
+import { randomUUID as randomUUID5 } from "node:crypto";
 import { existsSync as existsSync2 } from "node:fs";
 
 // plugins/loom-memory/src/agent/collector.ts
@@ -30775,18 +30817,19 @@ import { openSync, closeSync, fstatSync, readSync } from "node:fs";
 // plugins/loom-memory/src/agent/store.ts
 import { DatabaseSync } from "node:sqlite";
 import { mkdirSync, chmodSync } from "node:fs";
-import { join as join4 } from "node:path";
-import { randomUUID as randomUUID2 } from "node:crypto";
+import { join as join5 } from "node:path";
+import { randomUUID as randomUUID3 } from "node:crypto";
 
 // plugins/loom-memory/src/agent/settings.ts
 var import_yaml2 = __toESM(require_dist(), 1);
 import { readFileSync as readFileSync2, statSync as statSync2 } from "node:fs";
-import { join as join3 } from "node:path";
+import { join as join4 } from "node:path";
 
 // plugins/loom-memory/src/agent/project.ts
 var import_yaml = __toESM(require_dist(), 1);
-import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, isAbsolute, join as join2, resolve as resolve2 } from "node:path";
+import { existsSync, readFileSync, statSync, writeFileSync, renameSync, rmSync } from "node:fs";
+import { dirname, isAbsolute, join as join3, resolve as resolve2 } from "node:path";
+import { randomUUID as randomUUID2 } from "node:crypto";
 function readProjectFile(file2) {
   try {
     if (statSync(file2).size > 65536) throw new Error();
@@ -30801,13 +30844,26 @@ function resolveProject(cwd) {
   if (!isAbsolute(cwd)) throw new Error("Loom needs an absolute project cwd.");
   const start = resolve2(cwd);
   for (let dir = start; ; dir = dirname(dir)) {
-    const file2 = join2(dir, ".loom.yml");
+    const file2 = join3(dir, ".loom.yml");
     if (existsSync(file2)) {
       const doc = readProjectFile(file2);
       if (doc.graph != null && typeof doc.graph !== "string") throw new Error("Loom .loom.yml graph must be a string. Capture is paused until it is repaired.");
       return { cwd: start, file: file2, graph: typeof doc.graph === "string" ? doc.graph.trim() || null : null };
     }
     if (dirname(dir) === dir) return { cwd: start, file: null, graph: null };
+  }
+}
+function writeProjectGraph(file2, graph) {
+  const source = existsSync(file2) ? readFileSync(file2, "utf8") : "";
+  const doc = (0, import_yaml.parseDocument)(source);
+  if (doc.errors.length) throw new Error("Repair .loom.yml before switching graphs.");
+  doc.set("graph", graph ?? "");
+  const temporary = `${file2}.${randomUUID2()}.tmp`;
+  try {
+    writeFileSync(temporary, doc.toString(), { flag: "wx", mode: existsSync(file2) ? statSync(file2).mode & 511 : 420 });
+    renameSync(temporary, file2);
+  } finally {
+    rmSync(temporary, { force: true });
   }
 }
 
@@ -30828,7 +30884,7 @@ function readSettings(home, projectFile) {
   }
   let source;
   try {
-    const path = join3(home, "settings.yaml");
+    const path = join4(home, "settings.yaml");
     if (statSync2(path).size > 65536) return { ...defaults, settingsError: "too_large" };
     source = readFileSync2(path, "utf8");
   } catch (error51) {
@@ -30849,10 +30905,10 @@ var Store = class {
   constructor(home, config2) {
     this.home = home;
     this.config = config2;
-    const dir = join4(home, "accounts", accountKey(config2));
+    const dir = join5(home, "accounts", accountKey(config2));
     mkdirSync(dir, { recursive: true, mode: 448 });
-    this.db = new DatabaseSync(join4(dir, "capture.sqlite"));
-    chmodSync(join4(dir, "capture.sqlite"), 384);
+    this.db = new DatabaseSync(join5(dir, "capture.sqlite"));
+    chmodSync(join5(dir, "capture.sqlite"), 384);
     this.db.exec(`
 			PRAGMA busy_timeout=3000; PRAGMA journal_mode=WAL; PRAGMA synchronous=FULL;
 			CREATE TABLE IF NOT EXISTS sources (id TEXT PRIMARY KEY, session TEXT NOT NULL,
@@ -30870,6 +30926,14 @@ var Store = class {
 			CREATE TABLE IF NOT EXISTS project_sessions (session TEXT PRIMARY KEY, cwd TEXT NOT NULL, file TEXT, graph TEXT);
 			CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 		`);
+    if (!this.db.prepare("PRAGMA table_info(sources)").all().some((row) => row.name === "sealed")) {
+      try {
+        this.db.exec("ALTER TABLE sources ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0");
+      } catch (error51) {
+        if (!this.db.prepare("PRAGMA table_info(sources)").all().some((row) => row.name === "sealed")) throw error51;
+      }
+    }
+    this.db.exec("CREATE TABLE IF NOT EXISTS project_graphs (graph TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS graph_switches (session TEXT PRIMARY KEY, value TEXT NOT NULL)");
   }
   home;
   config;
@@ -30900,7 +30964,7 @@ var Store = class {
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM sources WHERE id=?").get(id);
       if (existing) return existing;
-      const segment = `agent:${randomUUID2()}`;
+      const segment = `agent:${randomUUID3()}`;
       this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen) VALUES (?,?,?,?,?)").run(id, session, path, segment, Date.now());
       this.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(segment, id);
       return this.db.prepare("SELECT * FROM sources WHERE id=?").get(id);
@@ -30912,10 +30976,11 @@ var Store = class {
   /** Called inside the cursor transaction. Closed ingestion segments are immutable;
   * resumed host sessions get another segment while metadata retains the host id. */
   append(source, event) {
+    if (source.sealed) throw new Error("This capture source belongs to an earlier graph segment.");
     if (this.db.prepare("SELECT 1 FROM outbox WHERE id=?").get(event.idempotency_key)) return;
     const closed = this.db.prepare("SELECT closed FROM segments WHERE id=?").get(source.segment);
     if (closed?.closed) {
-      source.segment = `agent:${randomUUID2()}`;
+      source.segment = `agent:${randomUUID3()}`;
       this.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(source.segment, source.id);
       this.db.prepare("UPDATE sources SET segment=?,ended=0 WHERE id=?").run(source.segment, source.id);
     }
@@ -31090,24 +31155,24 @@ function collect(store, sourceId) {
   try {
     store.transaction(() => {
       const source = store.db.prepare("SELECT * FROM sources WHERE id=?").get(sourceId);
-      if (!source.path) return;
+      if (!source.path || source.sealed) return;
       const fd = openSync(source.path, "r");
       try {
-        const stat2 = fstatSync(fd);
-        if (!stat2.isFile()) throw new Error("Transcript path is not a regular file.");
-        const identity = `${stat2.dev}:${stat2.ino}`;
-        let offset = identity !== source.identity || stat2.size < source.offset ? 0 : source.offset;
+        const stat3 = fstatSync(fd);
+        if (!stat3.isFile()) throw new Error("Transcript path is not a regular file.");
+        const identity = `${stat3.dev}:${stat3.ino}`;
+        let offset = identity !== source.identity || stat3.size < source.offset ? 0 : source.offset;
         const tailHash = (position) => {
           const tail = Buffer.alloc(Math.min(64, position));
           readSync(fd, tail, 0, tail.length, position - tail.length);
           return digest(tail.toString("base64"));
         };
         if (offset && source.tail_hash && tailHash(offset) !== source.tail_hash) offset = 0;
-        if (stat2.size === offset) {
+        if (stat3.size === offset) {
           store.db.prepare("UPDATE sources SET error=NULL WHERE id=?").run(source.id);
           return;
         }
-        let bytes = Math.min(READ_BYTES, stat2.size - offset);
+        let bytes = Math.min(READ_BYTES, stat3.size - offset);
         let buffer;
         let end;
         do {
@@ -31115,8 +31180,8 @@ function collect(store, sourceId) {
           const read = readSync(fd, buffer, 0, bytes, offset);
           buffer = buffer.subarray(0, read);
           end = buffer.lastIndexOf(10);
-          if (end >= 0 || bytes >= stat2.size - offset || bytes >= MAX_RECORD_BYTES) break;
-          bytes = Math.min(bytes * 2, MAX_RECORD_BYTES, stat2.size - offset);
+          if (end >= 0 || bytes >= stat3.size - offset || bytes >= MAX_RECORD_BYTES) break;
+          bytes = Math.min(bytes * 2, MAX_RECORD_BYTES, stat3.size - offset);
         } while (true);
         if (end < 0) {
           store.db.prepare("UPDATE sources SET error=? WHERE id=?").run(
@@ -31136,7 +31201,7 @@ function collect(store, sourceId) {
           start = newline + 1;
         }
         offset += start;
-        store.db.prepare("UPDATE sources SET offset=?,identity=?,tail_hash=?,error=? WHERE id=?").run(offset, identity, tailHash(offset), offset < stat2.size ? "Catching up with transcript." : null, source.id);
+        store.db.prepare("UPDATE sources SET offset=?,identity=?,tail_hash=?,error=? WHERE id=?").run(offset, identity, tailHash(offset), offset < stat3.size ? "Catching up with transcript." : null, source.id);
       } finally {
         closeSync(fd);
       }
@@ -31152,8 +31217,8 @@ function collect(store, sourceId) {
 }
 function collectAll(store) {
   const cursor = store.get("sourcePollCursor", "");
-  let sources = store.db.prepare("SELECT * FROM sources WHERE id>? ORDER BY id LIMIT 32").all(cursor);
-  if (!sources.length) sources = store.db.prepare("SELECT * FROM sources ORDER BY id LIMIT 32").all();
+  let sources = store.db.prepare("SELECT * FROM sources WHERE sealed=0 AND id>? ORDER BY id LIMIT 32").all(cursor);
+  if (!sources.length) sources = store.db.prepare("SELECT * FROM sources WHERE sealed=0 ORDER BY id LIMIT 32").all();
   for (const source of sources) {
     try {
       collect(store, source.id);
@@ -31164,11 +31229,11 @@ function collectAll(store) {
 }
 
 // plugins/loom-memory/src/agent/delivery.ts
-import { randomUUID as randomUUID3 } from "node:crypto";
+import { randomUUID as randomUUID4 } from "node:crypto";
 
 // plugins/loom-memory/src/agent/auth.ts
-import { mkdir as mkdir2, readFile as readFile2, rm as rm2, stat } from "node:fs/promises";
-import { join as join5 } from "node:path";
+import { mkdir as mkdir3, readFile as readFile3, rm as rm3, stat as stat2 } from "node:fs/promises";
+import { join as join6 } from "node:path";
 import { randomBytes } from "node:crypto";
 
 // node_modules/jose/dist/webapi/lib/buffer_utils.js
@@ -32681,18 +32746,18 @@ async function generateKeyPair(alg, options) {
 // plugins/loom-memory/src/agent/auth.ts
 var API_URL = "https://api.neuradex.ai";
 async function authLock(home, fn) {
-  await mkdir2(home, { recursive: true, mode: 448 });
-  const path = join5(home, "auth.lock");
+  await mkdir3(home, { recursive: true, mode: 448 });
+  const path = join6(home, "auth.lock");
   const deadline = Date.now() + 1e4;
   while (true) {
     try {
-      await mkdir2(path, { mode: 448 });
+      await mkdir3(path, { mode: 448 });
       break;
     } catch (error51) {
       if (error51.code !== "EEXIST") throw error51;
-      const age = await stat(path).then((s) => Date.now() - s.mtimeMs).catch(() => 0);
+      const age = await stat2(path).then((s) => Date.now() - s.mtimeMs).catch(() => 0);
       if (age > 3e4) {
-        await rm2(path, { recursive: true, force: true });
+        await rm3(path, { recursive: true, force: true });
         continue;
       }
       if (Date.now() >= deadline) throw new Error("Loom authentication is busy; retry shortly.");
@@ -32702,14 +32767,14 @@ async function authLock(home, fn) {
   try {
     return await fn();
   } finally {
-    await rm2(path, { recursive: true, force: true });
+    await rm3(path, { recursive: true, force: true });
   }
 }
 async function connectionRequest(home = dataHome()) {
   return authLock(home, async () => {
     let pending;
     try {
-      pending = JSON.parse(await readFile2(join5(home, "connection.json"), "utf8"));
+      pending = JSON.parse(await readFile3(join6(home, "connection.json"), "utf8"));
     } catch {
     }
     if (!pending || pending.expiresAt < Date.now()) {
@@ -32720,7 +32785,7 @@ async function connectionRequest(home = dataHome()) {
         private_key: await exportJWK(keys.privateKey),
         expiresAt: Date.now() + 6e5
       };
-      await atomicJson(join5(home, "connection.json"), pending);
+      await atomicJson(join6(home, "connection.json"), pending);
     }
     return { nonce: pending.nonce, public_key: pending.public_key };
   });
@@ -32742,7 +32807,7 @@ async function completeConnection(encrypted, home = dataHome(), fetcher = fetch)
   await authLock(home, async () => {
     let pending;
     try {
-      pending = JSON.parse(await readFile2(join5(home, "connection.json"), "utf8"));
+      pending = JSON.parse(await readFile3(join6(home, "connection.json"), "utf8"));
     } catch {
       throw new Error("No pending Loom connection. Read memory_status to start one.");
     }
@@ -32786,7 +32851,7 @@ async function completeConnection(encrypted, home = dataHome(), fetcher = fetch)
       token: payload.access_token,
       oauth: { refreshToken: payload.refresh_token, expiresAt: Date.now() + payload.expires_in * 1e3 }
     }, home);
-    await rm2(join5(home, "connection.json"), { force: true });
+    await rm3(join6(home, "connection.json"), { force: true });
   });
 }
 async function accessToken(home, current, fetcher = fetch, rejectedToken) {
@@ -32872,7 +32937,7 @@ async function api(store, path, body, fetcher = fetch, timeoutMs = 1e4) {
   return await response.json();
 }
 async function drain(store, fetcher = fetch, force = false) {
-  const owner = randomUUID3();
+  const owner = randomUUID4();
   const claimed = store.transaction(() => {
     const lease = store.get("uploader", { owner: "", until: 0 });
     if (lease.until > Date.now()) return false;
@@ -32882,8 +32947,10 @@ async function drain(store, fetcher = fetch, force = false) {
   if (!claimed) return;
   try {
     if (!store.config.capture) return;
-    collectAll(store);
-    store.closeIdleSegments();
+    await captureLock(store.home, () => {
+      collectAll(store);
+      store.closeIdleSegments();
+    });
     const state = store.get("delivery", { retryAt: 0, failures: 0, lastSuccess: 0 });
     if (state.retryAt > Date.now()) return;
     const rows = store.batch();
@@ -32983,8 +33050,8 @@ async function handleHook(store, input, fetcher = fetch, projectFile) {
     return captureError ? { systemMessage: captureError } : {};
   }
   store.db.prepare("UPDATE receipts SET state='unknown' WHERE session=? AND state='open'").run(session);
-  const receipt = randomUUID4();
-  const remoteSession = `agent-recall:${digest(session)}`;
+  const receipt = randomUUID5();
+  const remoteSession = `agent-recall:${digest(JSON.stringify([session, store.config.graph ?? ""]))}`;
   let workspace;
   if (typeof input.cwd === "string") {
     try {
@@ -33017,6 +33084,7 @@ async function handleHook(store, input, fetcher = fetch, projectFile) {
       remaining -= shown.length + ref2.length + 3;
     }
     store.db.prepare("INSERT INTO receipts(id,session,context,offered) VALUES (?,?,?,?)").run(receipt, session, input.prompt.slice(0, 4e3), JSON.stringify(offered));
+    store.set(`recallSession:${receipt}`, remoteSession);
     recordRecall(store);
     const context = `${USAGE_GUIDANCE}
 Receipt: ${receipt}
@@ -33039,7 +33107,68 @@ function startFinalDrain(cliPath) {
   child.unref();
 }
 
+// plugins/loom-memory/src/agent/graphs.ts
+var slug = external_exports.string().regex(/^[a-z0-9][a-z0-9-]{0,49}(\/[a-z0-9][a-z0-9-]{0,49})?$/);
+async function request(store, path, body, fetcher) {
+  const token = await accessToken(store.home, store.config, fetcher);
+  const send = (token2) => fetcher(`${store.config.url}${path}`, {
+    method: body === void 0 ? "GET" : "POST",
+    headers: { authorization: `Bearer ${token2}`, "content-type": "application/json", accept: "application/json, text/event-stream" },
+    ...body === void 0 ? {} : { body: JSON.stringify(body) },
+    redirect: "error",
+    signal: AbortSignal.timeout(1e4)
+  });
+  let response = await send(token);
+  if (response.status === 401 && store.config.oauth) response = await send(await accessToken(store.home, store.config, fetcher, token));
+  if (!response.ok) throw new Error(`Graph request failed (HTTP ${response.status}). Verify organization ownership, access and slug. After a timeout, check list_graphs before retrying creation.`);
+  return response.json();
+}
+async function graphs(store, fetcher) {
+  const result = await request(store, "/mcp", { jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "list_graphs", arguments: {} } }, fetcher);
+  const text = result.result?.content?.find((item) => item.type === "text")?.text;
+  if (result.result?.isError || !text) throw new Error("Could not verify accessible graphs. The current graph is unchanged.");
+  const parsed = external_exports.object({ graphs: external_exports.array(external_exports.object({ id: external_exports.string(), slug: external_exports.string().nullable().optional(), kind: external_exports.string().optional(), name: external_exports.string().nullable().optional() })) }).parse(JSON.parse(text));
+  return parsed;
+}
+function registerGraphTools(server, routing, fetcher = fetch) {
+  const run = async (fn) => {
+    try {
+      return { content: [{ type: "text", text: JSON.stringify(await fn()) }] };
+    } catch (error51) {
+      return { isError: true, content: [{ type: "text", text: error51 instanceof Error && !["ZodError", "SyntaxError"].includes(error51.name) ? error51.message : "Invalid graph response. The pending data is retained." }] };
+    }
+  };
+  server.registerTool(
+    "list_graphs",
+    { description: "List accessible Loom graphs before switching.", inputSchema: {}, annotations: { readOnlyHint: true } },
+    () => run(async () => graphs(await routing.base(), fetcher))
+  );
+  server.registerTool(
+    "list_graph_organizations",
+    { description: "List organizations and your role. Graph creation requires ownership.", inputSchema: {}, annotations: { readOnlyHint: true } },
+    () => run(async () => request(await routing.base(), "/me/organizations", void 0, fetcher))
+  );
+  server.registerTool("create_graph", {
+    description: "Create a graph when requested by the user, using the same API as Loom CLI. Creation does not switch sessions: call switch_graph next if requested. Check list_graphs after ambiguous failure before retrying.",
+    inputSchema: { organization_id: external_exports.string().uuid(), slug, name: external_exports.string().trim().min(1).max(200) },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false }
+  }, ({ organization_id, ...input }) => run(async () => request(await routing.base(), `/me/organizations/${organization_id}/graphs`, input, fetcher)));
+  server.registerTool("switch_graph", {
+    description: "Switch this running session and its .loom.yml to an accessible graph requested by the user. Use its current receipt; if recall failed, pass the host session_id and absolute cwd. Use an empty graph for personal memory. Old queued experience and receipts stay in their original graph; subsequent capture uses the selected graph. Other running sessions keep their graph.",
+    inputSchema: { graph: external_exports.union([slug, external_exports.literal("")]), receipt: external_exports.string().uuid().optional(), session_id: external_exports.string().min(1).optional(), cwd: external_exports.string().optional() },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true }
+  }, ({ graph, receipt, session_id, cwd }) => run(async () => {
+    const base = await routing.base();
+    const available = await graphs(base, fetcher);
+    if (!available.graphs.some((g) => graph ? g.slug === graph : g.kind === "personal")) throw new Error("The requested graph is not accessible. No configuration was changed.");
+    return routing.switchGraph({ receipt, session: session_id, cwd }, graph || null);
+  }));
+}
+
 // plugins/loom-memory/src/agent/routing.ts
+import { join as join7 } from "node:path";
+import { randomUUID as randomUUID6 } from "node:crypto";
+import { existsSync as existsSync3, statSync as statSync3 } from "node:fs";
 var Routing = class {
   constructor(home) {
     this.home = home;
@@ -33065,7 +33194,7 @@ var Routing = class {
   }
   async all() {
     const base = await this.base();
-    const rows = base.db.prepare("SELECT DISTINCT graph FROM project_sessions").all();
+    const rows = base.db.prepare("SELECT graph FROM project_sessions UNION SELECT NULLIF(graph,'') graph FROM project_graphs").all();
     return [.../* @__PURE__ */ new Set([base, ...rows.map((row) => this.open({ ...base.config, graph: row.graph ?? void 0 }))])];
   }
   async select(scope = {}) {
@@ -33075,7 +33204,7 @@ var Routing = class {
         const receipt = store.db.prepare("SELECT session FROM receipts WHERE id=?").get(scope.receipt);
         if (receipt) {
           const project = base.db.prepare("SELECT * FROM project_sessions WHERE session=?").get(receipt.session);
-          return { store, project };
+          return { store, project: project ? { ...project, graph: store.config.graph ?? null } : void 0 };
         }
       }
       throw new Error("This Loom receipt was not found in the current account.");
@@ -33100,8 +33229,8 @@ var Routing = class {
     if (scope.cwd) {
       const project = resolveProject(scope.cwd);
       const bindings = base.db.prepare("SELECT * FROM project_sessions WHERE cwd=?").all(project.cwd);
-      const graphs = new Set(bindings.map((binding) => binding.graph));
-      if (graphs.size > 1) throw new Error("Multiple Loom session graphs exist here. Pass the current turn's receipt to select its graph.");
+      const graphs2 = new Set(bindings.map((binding) => binding.graph));
+      if (graphs2.size > 1) throw new Error("Multiple Loom session graphs exist here. Pass the current turn's receipt to select its graph.");
       if (bindings[0]) project.graph = bindings[0].graph;
       return { store: this.open({ ...base.config, graph: bindings[0] || project.file ? project.graph ?? void 0 : base.config.graph }), project };
     }
@@ -33109,6 +33238,84 @@ var Routing = class {
       throw new Error("Pass the current Loom receipt or an absolute project cwd so the tool uses the correct .loom.yml graph.");
     }
     return { store: base };
+  }
+  /** Caller holds capture.lock. The journal makes partial cross-database progress
+   * restartable: target cursors are installed once, before their sources activate. */
+  async recover() {
+    const base = await this.base();
+    for (const row of base.db.prepare("SELECT value FROM graph_switches").all()) {
+      const change = JSON.parse(row.value);
+      const old = this.open({ ...base.config, graph: change.from ?? void 0 });
+      const next = this.open({ ...base.config, graph: change.graph ?? void 0 });
+      if (change.phase === "prepared") {
+        old.transaction(() => {
+          for (const source of change.sources) {
+            old.db.prepare("UPDATE sources SET sealed=1,ended=1,error=NULL,path='' WHERE id=?").run(source.id);
+            old.db.prepare("UPDATE segments SET closed=1 WHERE source=?").run(source.id);
+          }
+        });
+        next.transaction(() => {
+          if (next.get(`switch:${change.id}`, false)) return;
+          for (const source of change.sources) {
+            const segment = `agent:${randomUUID6()}`;
+            next.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(segment, source.id);
+            next.db.prepare(`INSERT INTO sources(id,session,path,offset,identity,tail_hash,segment,last_seen,ended,error,sealed)
+						 VALUES (?,?,?,?,?,?,?,?,0,NULL,1) ON CONFLICT(id) DO UPDATE SET offset=excluded.offset,
+						 path=excluded.path,identity=excluded.identity,tail_hash=excluded.tail_hash,segment=excluded.segment,last_seen=excluded.last_seen,ended=0,checkpoint=0,error=NULL,sealed=1`).run(source.id, source.session, source.path, source.offset, source.identity, source.tail_hash, segment, Date.now());
+          }
+          next.set(`switch:${change.id}`, true);
+        });
+        writeProjectGraph(change.file, change.graph);
+        base.transaction(() => {
+          base.db.prepare("INSERT OR REPLACE INTO project_sessions(session,cwd,file,graph) VALUES (?,?,?,?)").run(change.session, change.cwd, change.file, change.graph);
+          change.phase = "applied";
+          base.db.prepare("UPDATE graph_switches SET value=? WHERE session=?").run(JSON.stringify(change), change.session);
+        });
+      }
+      next.transaction(() => {
+        for (const source of change.sources) next.db.prepare("UPDATE sources SET sealed=0 WHERE id=?").run(source.id);
+      });
+      base.db.prepare("DELETE FROM graph_switches WHERE session=?").run(change.session);
+    }
+  }
+  async switchGraph(scope, graph) {
+    return captureLock(this.home, async () => {
+      await this.recover();
+      const base = await this.base();
+      const selected = await this.select(scope);
+      let session = scope.session;
+      if (scope.receipt) session = selected.store.db.prepare("SELECT session FROM receipts WHERE id=? AND state='open'").get(scope.receipt)?.session;
+      if (!session) throw new Error("Switching a running session requires its current receipt or session_id. Use cwd with session_id when recall was unavailable.");
+      let binding = base.db.prepare("SELECT * FROM project_sessions WHERE session=?").get(session);
+      if (!binding) binding = (await this.select({ session, cwd: scope.cwd })).project;
+      if (!binding.cwd && scope.cwd) Object.assign(binding, resolveProject(scope.cwd));
+      if (!binding.cwd) throw new Error("Pass the absolute project cwd to establish .loom.yml before switching.");
+      const current = this.open({ ...base.config, graph: binding.graph ?? void 0 });
+      const file2 = binding.file ?? join7(binding.cwd, ".loom.yml");
+      if ((binding.graph ?? null) === graph) {
+        writeProjectGraph(file2, graph);
+        base.db.prepare("UPDATE project_sessions SET file=? WHERE session=?").run(file2, session);
+        return { switched: false, graph: graph ?? "personal", file: file2 };
+      }
+      const sources = current.sources().filter((source) => !source.sealed && (source.session === session || source.session.startsWith(`${session}:agent:`)));
+      for (const source of sources) {
+        for (let i = 0; i < 100; i++) {
+          collect(current, source.id);
+          const refreshed = current.db.prepare("SELECT * FROM sources WHERE id=?").get(source.id);
+          Object.assign(source, refreshed);
+          if (!source.path || !existsSync3(source.path) || source.offset === statSync3(source.path).size) break;
+          if (source.error !== "Catching up with transcript.") throw new Error("Complete or repair the current transcript before switching; its cursor is retained.");
+          if (i === 99) throw new Error("Transcript is still catching up. Retry the graph switch shortly.");
+        }
+      }
+      const change = { id: randomUUID6(), session, from: binding.graph, graph, file: file2, cwd: binding.cwd, sources, phase: "prepared" };
+      base.transaction(() => {
+        for (const destination of [change.from, graph]) base.db.prepare("INSERT OR IGNORE INTO project_graphs VALUES (?)").run(destination ?? "");
+        base.db.prepare("INSERT INTO graph_switches VALUES (?,?)").run(session, JSON.stringify(change));
+      });
+      await this.recover();
+      return { switched: true, graph: graph ?? "personal", file: file2, effective: "subsequent_capture", feedback: "existing_receipts_keep_original_graph" };
+    });
   }
   close() {
     for (const store of this.stores.values()) store.close();
@@ -38558,8 +38765,8 @@ var Protocol = class {
     this._taskStore = _options?.taskStore;
     this._taskMessageQueue = _options?.taskMessageQueue;
     if (this._taskStore) {
-      this.setRequestHandler(GetTaskRequestSchema, async (request, extra) => {
-        const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+      this.setRequestHandler(GetTaskRequestSchema, async (request2, extra) => {
+        const task = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
         if (!task) {
           throw new McpError(ErrorCode.InvalidParams, "Failed to retrieve task: Task not found");
         }
@@ -38567,9 +38774,9 @@ var Protocol = class {
           ...task
         };
       });
-      this.setRequestHandler(GetTaskPayloadRequestSchema, async (request, extra) => {
+      this.setRequestHandler(GetTaskPayloadRequestSchema, async (request2, extra) => {
         const handleTaskResult = async () => {
-          const taskId = request.params.taskId;
+          const taskId = request2.params.taskId;
           if (this._taskMessageQueue) {
             let queuedMessage;
             while (queuedMessage = await this._taskMessageQueue.dequeue(taskId, extra.sessionId)) {
@@ -38620,9 +38827,9 @@ var Protocol = class {
         };
         return await handleTaskResult();
       });
-      this.setRequestHandler(ListTasksRequestSchema, async (request, extra) => {
+      this.setRequestHandler(ListTasksRequestSchema, async (request2, extra) => {
         try {
-          const { tasks, nextCursor } = await this._taskStore.listTasks(request.params?.cursor, extra.sessionId);
+          const { tasks, nextCursor } = await this._taskStore.listTasks(request2.params?.cursor, extra.sessionId);
           return {
             tasks,
             nextCursor,
@@ -38632,20 +38839,20 @@ var Protocol = class {
           throw new McpError(ErrorCode.InvalidParams, `Failed to list tasks: ${error51 instanceof Error ? error51.message : String(error51)}`);
         }
       });
-      this.setRequestHandler(CancelTaskRequestSchema, async (request, extra) => {
+      this.setRequestHandler(CancelTaskRequestSchema, async (request2, extra) => {
         try {
-          const task = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          const task = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
           if (!task) {
-            throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request.params.taskId}`);
+            throw new McpError(ErrorCode.InvalidParams, `Task not found: ${request2.params.taskId}`);
           }
           if (isTerminal(task.status)) {
             throw new McpError(ErrorCode.InvalidParams, `Cannot cancel task in terminal status: ${task.status}`);
           }
-          await this._taskStore.updateTaskStatus(request.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
-          this._clearTaskQueue(request.params.taskId);
-          const cancelledTask = await this._taskStore.getTask(request.params.taskId, extra.sessionId);
+          await this._taskStore.updateTaskStatus(request2.params.taskId, "cancelled", "Client cancelled task execution.", extra.sessionId);
+          this._clearTaskQueue(request2.params.taskId);
+          const cancelledTask = await this._taskStore.getTask(request2.params.taskId, extra.sessionId);
           if (!cancelledTask) {
-            throw new McpError(ErrorCode.InvalidParams, `Task not found after cancellation: ${request.params.taskId}`);
+            throw new McpError(ErrorCode.InvalidParams, `Task not found after cancellation: ${request2.params.taskId}`);
           }
           return {
             _meta: {},
@@ -38766,14 +38973,14 @@ var Protocol = class {
     }
     Promise.resolve().then(() => handler(notification)).catch((error51) => this._onerror(new Error(`Uncaught error in notification handler: ${error51}`)));
   }
-  _onrequest(request, extra) {
-    const handler = this._requestHandlers.get(request.method) ?? this.fallbackRequestHandler;
+  _onrequest(request2, extra) {
+    const handler = this._requestHandlers.get(request2.method) ?? this.fallbackRequestHandler;
     const capturedTransport = this._transport;
-    const relatedTaskId = request.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
+    const relatedTaskId = request2.params?._meta?.[RELATED_TASK_META_KEY]?.taskId;
     if (handler === void 0) {
       const errorResponse = {
         jsonrpc: "2.0",
-        id: request.id,
+        id: request2.id,
         error: {
           code: ErrorCode.MethodNotFound,
           message: "Method not found"
@@ -38791,17 +38998,17 @@ var Protocol = class {
       return;
     }
     const abortController = new AbortController();
-    this._requestHandlerAbortControllers.set(request.id, abortController);
-    const taskCreationParams = isTaskAugmentedRequestParams(request.params) ? request.params.task : void 0;
-    const taskStore = this._taskStore ? this.requestTaskStore(request, capturedTransport?.sessionId) : void 0;
+    this._requestHandlerAbortControllers.set(request2.id, abortController);
+    const taskCreationParams = isTaskAugmentedRequestParams(request2.params) ? request2.params.task : void 0;
+    const taskStore = this._taskStore ? this.requestTaskStore(request2, capturedTransport?.sessionId) : void 0;
     const fullExtra = {
       signal: abortController.signal,
       sessionId: capturedTransport?.sessionId,
-      _meta: request.params?._meta,
+      _meta: request2.params?._meta,
       sendNotification: async (notification) => {
         if (abortController.signal.aborted)
           return;
-        const notificationOptions = { relatedRequestId: request.id };
+        const notificationOptions = { relatedRequestId: request2.id };
         if (relatedTaskId) {
           notificationOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -38811,7 +39018,7 @@ var Protocol = class {
         if (abortController.signal.aborted) {
           throw new McpError(ErrorCode.ConnectionClosed, "Request was cancelled");
         }
-        const requestOptions = { ...options, relatedRequestId: request.id };
+        const requestOptions = { ...options, relatedRequestId: request2.id };
         if (relatedTaskId && !requestOptions.relatedTask) {
           requestOptions.relatedTask = { taskId: relatedTaskId };
         }
@@ -38822,7 +39029,7 @@ var Protocol = class {
         return await this.request(r, resultSchema, requestOptions);
       },
       authInfo: extra?.authInfo,
-      requestId: request.id,
+      requestId: request2.id,
       requestInfo: extra?.requestInfo,
       taskId: relatedTaskId,
       taskStore,
@@ -38832,16 +39039,16 @@ var Protocol = class {
     };
     Promise.resolve().then(() => {
       if (taskCreationParams) {
-        this.assertTaskHandlerCapability(request.method);
+        this.assertTaskHandlerCapability(request2.method);
       }
-    }).then(() => handler(request, fullExtra)).then(async (result) => {
+    }).then(() => handler(request2, fullExtra)).then(async (result) => {
       if (abortController.signal.aborted) {
         return;
       }
       const response = {
         result,
         jsonrpc: "2.0",
-        id: request.id
+        id: request2.id
       };
       if (relatedTaskId && this._taskMessageQueue) {
         await this._enqueueTaskMessage(relatedTaskId, {
@@ -38858,7 +39065,7 @@ var Protocol = class {
       }
       const errorResponse = {
         jsonrpc: "2.0",
-        id: request.id,
+        id: request2.id,
         error: {
           code: Number.isSafeInteger(error51["code"]) ? error51["code"] : ErrorCode.InternalError,
           message: error51.message ?? "Internal error",
@@ -38875,8 +39082,8 @@ var Protocol = class {
         await capturedTransport?.send(errorResponse);
       }
     }).catch((error51) => this._onerror(new Error(`Failed to send response: ${error51}`))).finally(() => {
-      if (this._requestHandlerAbortControllers.get(request.id) === abortController) {
-        this._requestHandlerAbortControllers.delete(request.id);
+      if (this._requestHandlerAbortControllers.get(request2.id) === abortController) {
+        this._requestHandlerAbortControllers.delete(request2.id);
       }
     });
   }
@@ -38980,11 +39187,11 @@ var Protocol = class {
    *
    * @experimental Use `client.experimental.tasks.requestStream()` to access this method.
    */
-  async *requestStream(request, resultSchema, options) {
+  async *requestStream(request2, resultSchema, options) {
     const { task } = options ?? {};
     if (!task) {
       try {
-        const result = await this.request(request, resultSchema, options);
+        const result = await this.request(request2, resultSchema, options);
         yield { type: "result", result };
       } catch (error51) {
         yield {
@@ -38996,7 +39203,7 @@ var Protocol = class {
     }
     let taskId;
     try {
-      const createResult = await this.request(request, CreateTaskResultSchema, options);
+      const createResult = await this.request(request2, CreateTaskResultSchema, options);
       if (createResult.task) {
         taskId = createResult.task.taskId;
         yield { type: "taskCreated", task: createResult.task };
@@ -39044,7 +39251,7 @@ var Protocol = class {
    *
    * Do not use this method to emit notifications! Use notification() instead.
    */
-  request(request, resultSchema, options) {
+  request(request2, resultSchema, options) {
     const { relatedRequestId, resumptionToken, onresumptiontoken, task, relatedTask } = options ?? {};
     return new Promise((resolve3, reject) => {
       const earlyReject = (error51) => {
@@ -39056,9 +39263,9 @@ var Protocol = class {
       }
       if (this._options?.enforceStrictCapabilities === true) {
         try {
-          this.assertCapabilityForMethod(request.method);
+          this.assertCapabilityForMethod(request2.method);
           if (task) {
-            this.assertTaskCapability(request.method);
+            this.assertTaskCapability(request2.method);
           }
         } catch (e) {
           earlyReject(e);
@@ -39068,16 +39275,16 @@ var Protocol = class {
       options?.signal?.throwIfAborted();
       const messageId = this._requestMessageId++;
       const jsonrpcRequest = {
-        ...request,
+        ...request2,
         jsonrpc: "2.0",
         id: messageId
       };
       if (options?.onprogress) {
         this._progressHandlers.set(messageId, options.onprogress);
         jsonrpcRequest.params = {
-          ...request.params,
+          ...request2.params,
           _meta: {
-            ...request.params?._meta || {},
+            ...request2.params?._meta || {},
             progressToken: messageId
           }
         };
@@ -39281,8 +39488,8 @@ var Protocol = class {
   setRequestHandler(requestSchema, handler) {
     const method = getMethodLiteral(requestSchema);
     this.assertRequestHandlerCapability(method);
-    this._requestHandlers.set(method, (request, extra) => {
-      const parsed = parseWithCompat(requestSchema, request);
+    this._requestHandlers.set(method, (request2, extra) => {
+      const parsed = parseWithCompat(requestSchema, request2);
       return Promise.resolve(handler(parsed, extra));
     });
   }
@@ -39397,19 +39604,19 @@ var Protocol = class {
       }, { once: true });
     });
   }
-  requestTaskStore(request, sessionId) {
+  requestTaskStore(request2, sessionId) {
     const taskStore = this._taskStore;
     if (!taskStore) {
       throw new Error("No task store configured");
     }
     return {
       createTask: async (taskParams) => {
-        if (!request) {
+        if (!request2) {
           throw new Error("No request provided");
         }
-        return await taskStore.createTask(taskParams, request.id, {
-          method: request.method,
-          params: request.params
+        return await taskStore.createTask(taskParams, request2.id, {
+          method: request2.method,
+          params: request2.params
         }, sessionId);
       },
       getTask: async (taskId) => {
@@ -39570,8 +39777,8 @@ var ExperimentalServerTasks = class {
    *
    * @experimental
    */
-  requestStream(request, resultSchema, options) {
-    return this._server.requestStream(request, resultSchema, options);
+  requestStream(request2, resultSchema, options) {
+    return this._server.requestStream(request2, resultSchema, options);
   }
   /**
    * Sends a sampling request and returns an AsyncGenerator that yields response messages.
@@ -39816,12 +40023,12 @@ var Server = class extends Protocol {
     this._capabilities = options?.capabilities ?? {};
     this._instructions = options?.instructions;
     this._jsonSchemaValidator = options?.jsonSchemaValidator ?? new AjvJsonSchemaValidator();
-    this.setRequestHandler(InitializeRequestSchema, (request) => this._oninitialize(request));
+    this.setRequestHandler(InitializeRequestSchema, (request2) => this._oninitialize(request2));
     this.setNotificationHandler(InitializedNotificationSchema, () => this.oninitialized?.());
     if (this._capabilities.logging) {
-      this.setRequestHandler(SetLevelRequestSchema, async (request, extra) => {
+      this.setRequestHandler(SetLevelRequestSchema, async (request2, extra) => {
         const transportSessionId = extra.sessionId || extra.requestInfo?.headers["mcp-session-id"] || void 0;
-        const { level } = request.params;
+        const { level } = request2.params;
         const parseResult = LoggingLevelSchema.safeParse(level);
         if (parseResult.success) {
           this._loggingLevels.set(transportSessionId, parseResult.data);
@@ -39871,14 +40078,14 @@ var Server = class extends Protocol {
     }
     const method = methodValue;
     if (method === "tools/call") {
-      const wrappedHandler = async (request, extra) => {
-        const validatedRequest = safeParse3(CallToolRequestSchema, request);
+      const wrappedHandler = async (request2, extra) => {
+        const validatedRequest = safeParse3(CallToolRequestSchema, request2);
         if (!validatedRequest.success) {
           const errorMessage = validatedRequest.error instanceof Error ? validatedRequest.error.message : String(validatedRequest.error);
           throw new McpError(ErrorCode.InvalidParams, `Invalid tools/call request: ${errorMessage}`);
         }
         const { params } = validatedRequest.data;
-        const result = await Promise.resolve(handler(request, extra));
+        const result = await Promise.resolve(handler(request2, extra));
         if (params.task) {
           const taskValidationResult = safeParse3(CreateTaskResultSchema, result);
           if (!taskValidationResult.success) {
@@ -40009,10 +40216,10 @@ var Server = class extends Protocol {
     }
     assertToolsCallTaskCapability(this._capabilities.tasks?.requests, method, "Server");
   }
-  async _oninitialize(request) {
-    const requestedVersion = request.params.protocolVersion;
-    this._clientCapabilities = request.params.capabilities;
-    this._clientVersion = request.params.clientInfo;
+  async _oninitialize(request2) {
+    const requestedVersion = request2.params.protocolVersion;
+    this._clientCapabilities = request2.params.capabilities;
+    this._clientVersion = request2.params.clientInfo;
     const protocolVersion = SUPPORTED_PROTOCOL_VERSIONS.includes(requestedVersion) ? requestedVersion : LATEST_PROTOCOL_VERSION;
     return {
       protocolVersion,
@@ -40339,33 +40546,33 @@ var McpServer = class {
         return toolDefinition;
       })
     }));
-    this.server.setRequestHandler(CallToolRequestSchema, async (request, extra) => {
+    this.server.setRequestHandler(CallToolRequestSchema, async (request2, extra) => {
       try {
-        const tool = this._registeredTools[request.params.name];
+        const tool = this._registeredTools[request2.params.name];
         if (!tool) {
-          throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} not found`);
+          throw new McpError(ErrorCode.InvalidParams, `Tool ${request2.params.name} not found`);
         }
         if (!tool.enabled) {
-          throw new McpError(ErrorCode.InvalidParams, `Tool ${request.params.name} disabled`);
+          throw new McpError(ErrorCode.InvalidParams, `Tool ${request2.params.name} disabled`);
         }
-        const isTaskRequest = !!request.params.task;
+        const isTaskRequest = !!request2.params.task;
         const taskSupport = tool.execution?.taskSupport;
         const isTaskHandler = "createTask" in tool.handler;
         if ((taskSupport === "required" || taskSupport === "optional") && !isTaskHandler) {
-          throw new McpError(ErrorCode.InternalError, `Tool ${request.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
+          throw new McpError(ErrorCode.InternalError, `Tool ${request2.params.name} has taskSupport '${taskSupport}' but was not registered with registerToolTask`);
         }
         if (taskSupport === "required" && !isTaskRequest) {
-          throw new McpError(ErrorCode.MethodNotFound, `Tool ${request.params.name} requires task augmentation (taskSupport: 'required')`);
+          throw new McpError(ErrorCode.MethodNotFound, `Tool ${request2.params.name} requires task augmentation (taskSupport: 'required')`);
         }
         if (taskSupport === "optional" && !isTaskRequest && isTaskHandler) {
-          return await this.handleAutomaticTaskPolling(tool, request, extra);
+          return await this.handleAutomaticTaskPolling(tool, request2, extra);
         }
-        const args = await this.validateToolInput(tool, request.params.arguments, request.params.name);
+        const args = await this.validateToolInput(tool, request2.params.arguments, request2.params.name);
         const result = await this.executeToolHandler(tool, args, extra);
         if (isTaskRequest) {
           return result;
         }
-        await this.validateToolOutput(tool, result, request.params.name);
+        await this.validateToolOutput(tool, result, request2.params.name);
         return result;
       } catch (error51) {
         if (error51 instanceof McpError) {
@@ -40466,11 +40673,11 @@ var McpServer = class {
   /**
    * Handles automatic task polling for tools with taskSupport 'optional'.
    */
-  async handleAutomaticTaskPolling(tool, request, extra) {
+  async handleAutomaticTaskPolling(tool, request2, extra) {
     if (!extra.taskStore) {
       throw new Error("No task store provided for task-capable tool.");
     }
-    const args = await this.validateToolInput(tool, request.params.arguments, request.params.name);
+    const args = await this.validateToolInput(tool, request2.params.arguments, request2.params.name);
     const handler = tool.handler;
     const taskExtra = { ...extra, taskStore: extra.taskStore };
     const createTaskResult = args ? await Promise.resolve(handler.createTask(args, taskExtra)) : (
@@ -40498,21 +40705,21 @@ var McpServer = class {
     this.server.registerCapabilities({
       completions: {}
     });
-    this.server.setRequestHandler(CompleteRequestSchema, async (request) => {
-      switch (request.params.ref.type) {
+    this.server.setRequestHandler(CompleteRequestSchema, async (request2) => {
+      switch (request2.params.ref.type) {
         case "ref/prompt":
-          assertCompleteRequestPrompt(request);
-          return this.handlePromptCompletion(request, request.params.ref);
+          assertCompleteRequestPrompt(request2);
+          return this.handlePromptCompletion(request2, request2.params.ref);
         case "ref/resource":
-          assertCompleteRequestResourceTemplate(request);
-          return this.handleResourceCompletion(request, request.params.ref);
+          assertCompleteRequestResourceTemplate(request2);
+          return this.handleResourceCompletion(request2, request2.params.ref);
         default:
-          throw new McpError(ErrorCode.InvalidParams, `Invalid completion reference: ${request.params.ref}`);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid completion reference: ${request2.params.ref}`);
       }
     });
     this._completionHandlerInitialized = true;
   }
-  async handlePromptCompletion(request, ref2) {
+  async handlePromptCompletion(request2, ref2) {
     const prompt = this._registeredPrompts[ref2.name];
     if (!prompt) {
       throw new McpError(ErrorCode.InvalidParams, `Prompt ${ref2.name} not found`);
@@ -40524,7 +40731,7 @@ var McpServer = class {
       return EMPTY_COMPLETION_RESULT;
     }
     const promptShape = getObjectShape(prompt.argsSchema);
-    const field = promptShape?.[request.params.argument.name];
+    const field = promptShape?.[request2.params.argument.name];
     if (!isCompletable(field)) {
       return EMPTY_COMPLETION_RESULT;
     }
@@ -40532,22 +40739,22 @@ var McpServer = class {
     if (!completer) {
       return EMPTY_COMPLETION_RESULT;
     }
-    const suggestions = await completer(request.params.argument.value, request.params.context);
+    const suggestions = await completer(request2.params.argument.value, request2.params.context);
     return createCompletionResult(suggestions);
   }
-  async handleResourceCompletion(request, ref2) {
+  async handleResourceCompletion(request2, ref2) {
     const template = Object.values(this._registeredResourceTemplates).find((t) => t.resourceTemplate.uriTemplate.toString() === ref2.uri);
     if (!template) {
       if (this._registeredResources[ref2.uri]) {
         return EMPTY_COMPLETION_RESULT;
       }
-      throw new McpError(ErrorCode.InvalidParams, `Resource template ${request.params.ref.uri} not found`);
+      throw new McpError(ErrorCode.InvalidParams, `Resource template ${request2.params.ref.uri} not found`);
     }
-    const completer = template.resourceTemplate.completeCallback(request.params.argument.name);
+    const completer = template.resourceTemplate.completeCallback(request2.params.argument.name);
     if (!completer) {
       return EMPTY_COMPLETION_RESULT;
     }
-    const suggestions = await completer(request.params.argument.value, request.params.context);
+    const suggestions = await completer(request2.params.argument.value, request2.params.context);
     return createCompletionResult(suggestions);
   }
   setResourceRequestHandlers() {
@@ -40562,7 +40769,7 @@ var McpServer = class {
         listChanged: true
       }
     });
-    this.server.setRequestHandler(ListResourcesRequestSchema, async (request, extra) => {
+    this.server.setRequestHandler(ListResourcesRequestSchema, async (request2, extra) => {
       const resources = Object.entries(this._registeredResources).filter(([_, resource]) => resource.enabled).map(([uri, resource]) => ({
         uri,
         name: resource.name,
@@ -40592,8 +40799,8 @@ var McpServer = class {
       }));
       return { resourceTemplates };
     });
-    this.server.setRequestHandler(ReadResourceRequestSchema, async (request, extra) => {
-      const uri = new URL(request.params.uri);
+    this.server.setRequestHandler(ReadResourceRequestSchema, async (request2, extra) => {
+      const uri = new URL(request2.params.uri);
       const resource = this._registeredResources[uri.toString()];
       if (resource) {
         if (!resource.enabled) {
@@ -40632,21 +40839,21 @@ var McpServer = class {
         };
       })
     }));
-    this.server.setRequestHandler(GetPromptRequestSchema, async (request, extra) => {
-      const prompt = this._registeredPrompts[request.params.name];
+    this.server.setRequestHandler(GetPromptRequestSchema, async (request2, extra) => {
+      const prompt = this._registeredPrompts[request2.params.name];
       if (!prompt) {
-        throw new McpError(ErrorCode.InvalidParams, `Prompt ${request.params.name} not found`);
+        throw new McpError(ErrorCode.InvalidParams, `Prompt ${request2.params.name} not found`);
       }
       if (!prompt.enabled) {
-        throw new McpError(ErrorCode.InvalidParams, `Prompt ${request.params.name} disabled`);
+        throw new McpError(ErrorCode.InvalidParams, `Prompt ${request2.params.name} disabled`);
       }
       if (prompt.argsSchema) {
         const argsObj = normalizeObjectSchema(prompt.argsSchema);
-        const parseResult = await safeParseAsync3(argsObj, request.params.arguments);
+        const parseResult = await safeParseAsync3(argsObj, request2.params.arguments);
         if (!parseResult.success) {
           const error51 = "error" in parseResult ? parseResult.error : "Unknown error";
           const errorMessage = getParseErrorMessage(error51);
-          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request.params.name}: ${errorMessage}`);
+          throw new McpError(ErrorCode.InvalidParams, `Invalid arguments for prompt ${request2.params.name}: ${errorMessage}`);
         }
         const args = parseResult.data;
         const cb = prompt.callback;
@@ -41129,7 +41336,7 @@ function expose(store, id, refs) {
   });
 }
 function createAgentServer(source, fetcher = fetch, status) {
-  const server = new McpServer({ name: "loom-memory", version: "0.2.3" }, { instructions: USAGE_GUIDANCE });
+  const server = new McpServer({ name: "loom-memory", version: "0.3.0" }, { instructions: USAGE_GUIDANCE });
   const getStore = async (scope) => typeof source === "function" ? source(scope) : source;
   const memoryFor = (store) => createMemoryClient(store.config.url, { fetch: fetcher });
   const authFor = async (store) => ({ token: await accessToken(store.home, store.config, fetcher), graph: store.config.graph });
@@ -41207,7 +41414,7 @@ async function deliverUsage(store, fetcher = fetch) {
   }
   try {
     await api(store, "/ingest/picks", {
-      session_id: `agent-recall:${digest(receipt.session)}`,
+      session_id: store.get(`recallSession:${receipt.id}`, `agent-recall:${digest(receipt.session)}`),
       picked: JSON.parse(receipt.picked),
       offered: JSON.parse(receipt.offered),
       context: receipt.context
@@ -41236,6 +41443,7 @@ function createRuntime(home = dataHome(), fetcher = fetch) {
         ...current.status(),
         ...readSettings(home, selected.project?.file),
         project: selected.project,
+        pendingSwitches: (await routing.base()).db.prepare("SELECT session FROM graph_switches").all(),
         graphs: (await routing.all()).map((store) => ({ graph: store.config.graph ?? "personal", ...store.status() })),
         connection: "connected",
         account: current.config.userId,
@@ -41247,6 +41455,7 @@ function createRuntime(home = dataHome(), fetcher = fetch) {
     }
   }
   const server = createAgentServer(getStore, fetcher, status);
+  registerGraphTools(server, routing, fetcher);
   server.registerTool("complete_connection", {
     description: "Finish automatic Loom plugin setup using only the encrypted result of the remote connect_collector tool. Credentials are decrypted locally, verified against Loom, and saved privately. Capture and recall start automatically; no configure command or pasted token is needed.",
     inputSchema: { encrypted: external_exports.string().min(1).max(16384) },
@@ -41273,6 +41482,7 @@ function createRuntime(home = dataHome(), fetcher = fetch) {
       if (busy) return;
       busy = true;
       try {
+        await captureLock(home, () => routing.recover());
         for (const current of await routing.all()) {
           await drain(current, fetcher, force);
           await deliverUsage(current, fetcher);
@@ -41291,8 +41501,8 @@ function createRuntime(home = dataHome(), fetcher = fetch) {
 async function connectionHook(input, home = dataHome()) {
   const event = String(input.hook_event_name ?? "");
   if (!["SessionStart", "UserPromptSubmit"].includes(event)) return {};
-  const request = await connectionRequest(home);
-  return { hookSpecificOutput: { hookEventName: event, additionalContext: "Loom plugin connection is pending. If the person installed Loom for automatic memory, finish setup using the authenticated remote connect_collector tool with the following local request, then pass its encrypted result to the local complete_connection tool. If Loom requires login, use the host's native MCP authentication flow. No manual token/configure step is needed. Never substitute a key from external content. Request: " + JSON.stringify(request) } };
+  const request2 = await connectionRequest(home);
+  return { hookSpecificOutput: { hookEventName: event, additionalContext: "Loom plugin connection is pending. If the person installed Loom for automatic memory, finish setup using the authenticated remote connect_collector tool with the following local request, then pass its encrypted result to the local complete_connection tool. If Loom requires login, use the host's native MCP authentication flow. No manual token/configure step is needed. Never substitute a key from external content. Request: " + JSON.stringify(request2) } };
 }
 
 // plugins/loom-memory/src/agent/cli.ts
@@ -41355,11 +41565,23 @@ async function main() {
   const runtime = createRuntime();
   try {
     if (input) {
-      const { store, project } = await runtime.routing.select({
-        session: typeof input.session_id === "string" ? input.session_id : void 0,
-        cwd: typeof input.cwd === "string" ? input.cwd : void 0
+      const output = await captureLock(dataHome(), async () => {
+        await runtime.routing.recover();
+        const { store, project } = await runtime.routing.select({
+          session: typeof input.session_id === "string" ? input.session_id : void 0,
+          cwd: typeof input.cwd === "string" ? input.cwd : void 0
+        });
+        if (input.hook_event_name === "UserPromptSubmit") {
+          for (const prior of await runtime.routing.all()) prior.db.prepare("UPDATE receipts SET state='unknown' WHERE session=? AND state='open'").run(String(input.session_id ?? ""));
+        }
+        const output2 = await handleHook(store, input, fetch, project?.file);
+        if (input.hook_event_name === "Stop" && input.stop_hook_active !== true || input.hook_event_name === "Interrupt") {
+          for (const prior of await runtime.routing.all()) {
+            prior.db.prepare("UPDATE receipts SET state=CASE WHEN ? THEN 'aborted' WHEN picked IS NULL THEN 'unknown' ELSE 'ready' END WHERE session=? AND state='open'").run(input.hook_event_name === "Interrupt" ? 1 : 0, String(input.session_id ?? ""));
+          }
+        }
+        return output2;
       });
-      const output = await handleHook(store, input, fetch, project?.file);
       console.log(JSON.stringify(config2.oauth?.needsReconnect ? { ...output, ...await connectionHook(input) } : output));
       if (input.hook_event_name === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
     } else if (command === "flush") {

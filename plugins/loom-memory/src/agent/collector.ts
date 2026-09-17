@@ -114,7 +114,7 @@ export function collect(store: Store, sourceId: string): number {
 	try {
 		store.transaction(() => {
 			const source = store.db.prepare("SELECT * FROM sources WHERE id=?").get(sourceId) as unknown as Source;
-			if (!source.path) return;
+			if (!source.path || source.sealed) return;
 			const fd = openSync(source.path, "r");
 			try {
 				const stat = fstatSync(fd);
@@ -173,8 +173,8 @@ export function collectAll(store: Store): void {
 	// Fair bounded polling prevents long-lived accounts with many registered
 	// transcripts from monopolizing the uploader lease or one event-loop tick.
 	const cursor = store.get("sourcePollCursor", "");
-	let sources = store.db.prepare("SELECT * FROM sources WHERE id>? ORDER BY id LIMIT 32").all(cursor) as unknown as Source[];
-	if (!sources.length) sources = store.db.prepare("SELECT * FROM sources ORDER BY id LIMIT 32").all() as unknown as Source[];
+	let sources = store.db.prepare("SELECT * FROM sources WHERE sealed=0 AND id>? ORDER BY id LIMIT 32").all(cursor) as unknown as Source[];
+	if (!sources.length) sources = store.db.prepare("SELECT * FROM sources WHERE sealed=0 ORDER BY id LIMIT 32").all() as unknown as Source[];
 	for (const source of sources) {
 		try { collect(store, source.id); }
 		catch { /* Each source retains its own error and cursor; other sessions can progress. */ }

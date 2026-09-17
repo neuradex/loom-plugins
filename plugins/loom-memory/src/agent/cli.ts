@@ -1,6 +1,7 @@
+import { captureLock } from "./capture-lock.js";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { NotConnectedError, readConfig, saveConfig } from "./config.js";
+import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
 import { handleHook, startFinalDrain } from "./hooks.js";
 import { connectionHook, createRuntime } from "./runtime.js";
 
@@ -45,9 +46,23 @@ async function main(): Promise<void> {
 	const runtime = createRuntime();
 	try {
 		if (input) {
-			const { store, project } = await runtime.routing.select({ session: typeof input.session_id === "string" ? input.session_id : undefined,
-				cwd: typeof input.cwd === "string" ? input.cwd : undefined });
-			const output = await handleHook(store, input, fetch, project?.file);
+			const output = await captureLock(dataHome(), async () => {
+				await runtime.routing.recover();
+				const { store, project } = await runtime.routing.select({ session: typeof input.session_id === "string" ? input.session_id : undefined,
+					cwd: typeof input.cwd === "string" ? input.cwd : undefined });
+				if (input.hook_event_name === "UserPromptSubmit") {
+					for (const prior of await runtime.routing.all()) prior.db.prepare("UPDATE receipts SET state='unknown' WHERE session=? AND state='open'").run(String(input.session_id ?? ""));
+				}
+				const output = await handleHook(store, input, fetch, project?.file);
+				// A switch can leave the current turn's receipt in an earlier graph.
+				if (input.hook_event_name === "Stop" && input.stop_hook_active !== true || input.hook_event_name === "Interrupt") {
+					for (const prior of await runtime.routing.all()) {
+						prior.db.prepare("UPDATE receipts SET state=CASE WHEN ? THEN 'aborted' WHEN picked IS NULL THEN 'unknown' ELSE 'ready' END WHERE session=? AND state='open'")
+							.run(input.hook_event_name === "Interrupt" ? 1 : 0, String(input.session_id ?? ""));
+					}
+				}
+				return output;
+			});
 			console.log(JSON.stringify(config.oauth?.needsReconnect ? { ...output, ...await connectionHook(input) } : output));
 			if (input.hook_event_name === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
 		} else if (command === "flush") {

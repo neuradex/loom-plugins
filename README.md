@@ -66,13 +66,26 @@ notifications:
 
 `graph` selects the graph for automatic recall, experience capture and memory-use feedback. An empty or missing graph in that file selects personal memory. Server membership checks still authorize every request; a project file cannot change credentials or the API URL. With no project file, an explicitly configured collector graph remains the compatibility default (otherwise personal).
 
-Each host session keeps its initial graph across directory changes, file edits and restarts, matching Loom CLI's session semantics. Start a new session to adopt a changed graph. Sessions already captured before this update retain their original destination. Separate projects can use separate graphs concurrently; queued events and receipts remain isolated, and the uploader drains all registered graph queues.
+Each host session keeps its initial graph across directory changes, file edits and restarts. Start a new session to adopt a manual file edit, or use `switch_graph` to explicitly switch the running session. Sessions already captured before this update retain their original destination. Separate projects can use separate graphs concurrently; queued events and receipts remain isolated, and the uploader drains all registered graph queues.
 
 Automatic recall failures are quiet by default. `notifications.recall_errors: true` shows their hook warnings. Notification edits in the session's `.loom.yml` apply on the next prompt. The old 0.2.2 `~/.loom/agent-memory/settings.yaml` is only a compatibility fallback when no project file was found; new configuration belongs in `.loom.yml`. Loom CLI ignores the extra notification key and its `/graph` command preserves it.
 
 Local MCP tools use the current turn's `receipt` to retain the same graph; this also works after a restart. Without a receipt, pass the absolute project `cwd`. If several session graphs exist for that directory, use a receipt rather than guessing. Remote-only MCP clients continue to use their explicit graph argument; they cannot read local project files.
 
 `memory_status` lists graph queues; pass `receipt` or `cwd` to inspect a project's settings, recall diagnostics and graph. Private credentials remain in `config.json`. Capture/configuration problems retain their warnings. Invalid notification preferences fall back to quiet mode with `settingsError` in status. Unreadable YAML or an invalid graph prevents a new session from being bound, so capture does not silently move into another graph; repair the file and retry.
+
+## Create and switch graphs
+
+Ask the agent to list your graphs, create one, or switch this project:
+
+- `list_graphs` lists accessible graphs.
+- `list_graph_organizations` lists creation destinations and your role.
+- `create_graph(organization_id, slug, name)` calls the **same** `POST /me/organizations/:id/graphs` API as Loom CLI. Organization ownership and `memory:write` are checked on the server. Creation does not silently switch other sessions.
+- `switch_graph(graph, receipt)` verifies access, updates `.loom.yml` while preserving comments/settings, and switches capture for the current session. An empty `graph` selects personal memory. If recall was unavailable, supply the host `session_id` and absolute `cwd` instead of a receipt.
+
+A switch catches up the original transcript, seals its old capture cursor, and starts the destination at that cursor. Old queued episodes, segments and usage receipts stay in their original graph; later records go to the destination. Returning to an earlier graph does not replay the intervening transcript. A durable transition journal resumes an interrupted switch before capture continues. Other running sessions keep their existing selection; new sessions use the updated file.
+
+Remote-only MCP provides discovery and creation through the same server API. Project/session selection belongs to the local client: the server does not store a global active graph that would mix concurrent projects. After an ambiguous creation failure, check `list_graphs` before retrying.
 
 ## Check delivery and update
 

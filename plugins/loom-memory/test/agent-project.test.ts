@@ -117,3 +117,73 @@ it("retains forbidden team uploads in that graph instead of retrying them as per
 	expect(store.status()).toMatchObject({ queue: { events: 1 }, delivery: { failures: 1 } });
 	expect((await runtime.routing.base()).status()).toMatchObject({ queue: { events: 0 } });
 });
+
+it("switches A → B → A without replaying history, retains old receipts, and preserves YAML", async () => {
+ const home = scratch(); await saveConfig({ token: "fixture" }, home);
+ const file = join(home, ".loom.yml"); writeFileSync(file, '# team settings\ngraph: acme/a\nnotifications:\n  recall_errors: true\n');
+ const transcript = join(home, "session.jsonl");
+ const record = (id: string) => JSON.stringify({ uuid: id, type: "user", message: { role: "user", content: id } }) + '\n';
+ writeFileSync(transcript, record("before"));
+ const runtime = createRuntime(home, (async () => Response.json({ candidate_lines: ['<knowledge id="7">evidence</knowledge>'], candidates: [{ref:"kn:7"}] })) as typeof fetch);
+ cleanup.push(() => runtime.close());
+ const a = (await runtime.routing.select({ session: "switch", cwd: home })).store;
+ const input = { session_id: "switch", cwd: home, transcript_path: transcript, hook_event_name: "UserPromptSubmit", prompt: "question" };
+ const output = await handleHook(a, input, (async () => Response.json({ candidate_lines: ['<knowledge id="7">evidence</knowledge>'], candidates: [{ref:"kn:7"}] })) as typeof fetch);
+ const receipt = ((output.hookSpecificOutput as any).additionalContext as string).match(/Receipt: ([\w-]+)/)![1]!;
+ await runtime.routing.switchGraph({ receipt }, "acme/b");
+ const b = (await runtime.routing.select({ session: "switch" })).store;
+ expect(b.config.graph).toBe("acme/b");
+ expect((await runtime.routing.select({ receipt })).store.config.graph).toBe("acme/a");
+ writeFileSync(transcript, record("before") + record("middle"));
+ await handleHook(b, { ...input, hook_event_name: "PostToolUse" });
+ // Polling the old graph cannot read newly appended bytes.
+ const { collectAll } = await import("../src/agent/collector.js"); collectAll(a);
+ expect(a.batch().map(row=>JSON.parse(row.body).content)).toEqual([record("before").trim()]);
+ await runtime.routing.switchGraph({ receipt }, "acme/a");
+ writeFileSync(transcript, record("before") + record("middle") + record("after"));
+ await handleHook(a, { ...input, hook_event_name: "PostToolUse" }); collectAll(b);
+ expect(a.batch().map(row=>JSON.parse(row.body).content)).toEqual([record("before").trim(),record("after").trim()]);
+ expect(b.batch().map(row=>JSON.parse(row.body).content)).toEqual([record("middle").trim()]);
+ expect(readSettings(home, file).notifications.recall_errors).toBe(true);
+ expect((await import("node:fs")).readFileSync(file,"utf8")).toContain("# team settings");
+ expect((await runtime.routing.all()).map(store=>store.config.graph)).toContain("acme/b");
+});
+
+it("recovers an interrupted switch exactly once without rewinding the destination cursor", async () => {
+ const home = scratch(); await saveConfig({ token: "fixture" }, home);
+ const file = join(home,".loom.yml"); writeFileSync(file,"graph: acme/a\n");
+ const runtime = createRuntime(home); cleanup.push(()=>runtime.close());
+ const old = (await runtime.routing.select({session:"crash",cwd:home})).store;
+ const source = old.source("crash", "");
+ const base = await runtime.routing.base();
+ // Durable journal at the same boundary written before sealing/copying sources.
+ base.db.prepare("INSERT INTO graph_switches VALUES (?,?)").run("crash", JSON.stringify({id:"crash-switch",session:"crash",from:"acme/a",graph:"acme/b",cwd:home,file,sources:[source],phase:"prepared"}));
+ for(const graph of ["acme/a","acme/b"])base.db.prepare("INSERT OR IGNORE INTO project_graphs VALUES (?)").run(graph);
+ await runtime.routing.recover();
+ const next=(await runtime.routing.select({session:"crash"})).store;
+ expect(old.sources()[0]?.sealed).toBe(1); expect(next.sources()[0]?.sealed).toBe(0);
+ next.db.prepare("UPDATE sources SET offset=123 WHERE id=?").run(source.id);
+ await runtime.routing.recover();
+ expect(next.sources()[0]?.offset).toBe(123);
+ expect(base.db.prepare("SELECT * FROM graph_switches").all()).toHaveLength(0);
+});
+
+it("exposes graph creation through the CLI API and refuses inaccessible switches before editing YAML", async () => {
+ const home=scratch(); await saveConfig({token:"fixture",url:"http://127.0.0.1:9"},home);
+ const file=join(home,".loom.yml"); writeFileSync(file,"graph: acme/a\n");
+ const requests: Array<{path:string;body:any}> = [];
+ const fetcher=(async(url,init)=>{
+  const path=new URL(String(url)).pathname; const body=init?.body?JSON.parse(String(init.body)):undefined; requests.push({path,body});
+  if(path==="/mcp")return Response.json({result:{content:[{type:"text",text:JSON.stringify({graphs:[{id:"a",slug:"acme/a",kind:"shared"},{id:"b",slug:"acme/b",kind:"shared"}]})}]}});
+  return Response.json({ok:true,slug:"acme/b"});
+ }) as typeof fetch;
+ const runtime=createRuntime(home,fetcher);cleanup.push(()=>runtime.close());
+ const [a,b]=InMemoryTransport.createLinkedPair();const client=new Client({name:"graphs",version:"1"});
+ await runtime.server.connect(a);await client.connect(b);cleanup.push(()=>client.close());
+ const created=await client.callTool({name:"create_graph",arguments:{organization_id:"11111111-1111-4111-8111-111111111111",slug:"acme/b",name:"B"}});
+ expect(created.isError).toBeUndefined();expect(requests[0]).toEqual({path:"/me/organizations/11111111-1111-4111-8111-111111111111/graphs",body:{slug:"acme/b",name:"B"}});
+ const denied=await client.callTool({name:"switch_graph",arguments:{session_id:"tool-switch",cwd:home,graph:"private/unknown"}});
+ expect(denied.isError).toBe(true);expect(resolveProject(home).graph).toBe("acme/a");
+ const switched=await client.callTool({name:"switch_graph",arguments:{session_id:"tool-switch",cwd:home,graph:"acme/b"}});
+ expect(switched.isError).toBeUndefined();expect(resolveProject(home).graph).toBe("acme/b");
+});

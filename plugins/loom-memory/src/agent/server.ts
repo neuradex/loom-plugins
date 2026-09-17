@@ -29,7 +29,7 @@ function expose(store: Store, id: string | undefined, refs: string[]): void {
 }
 
 export function createAgentServer(source: Store | ((scope?: Scope) => Promise<Store>), fetcher = fetch, status?: (scope?: Scope) => Promise<unknown>): McpServer {
-	const server = new McpServer({ name: "loom-memory", version: "0.2.3" }, { instructions: USAGE_GUIDANCE });
+	const server = new McpServer({ name: "loom-memory", version: "0.3.0" }, { instructions: USAGE_GUIDANCE });
 	const getStore = async (scope: Scope) => typeof source === "function" ? source(scope) : source;
 	const memoryFor = (store: Store) => createMemoryClient(store.config.url, { fetch: fetcher });
 	const authFor = async (store: Store) => ({ token: await accessToken(store.home, store.config, fetcher), graph: store.config.graph });
@@ -97,7 +97,7 @@ export async function deliverUsage(store: Store, fetcher = fetch): Promise<void>
 	}
 	try {
 		await api(store, "/ingest/picks", {
-			session_id: `agent-recall:${digest(receipt.session)}`,
+			session_id: store.get(`recallSession:${receipt.id}`, `agent-recall:${digest(receipt.session)}`),
 			picked: JSON.parse(receipt.picked!), offered: JSON.parse(receipt.offered), context: receipt.context,
 		}, fetcher);
 		store.db.prepare("UPDATE receipts SET state='sent' WHERE id=?").run(receipt.id);
