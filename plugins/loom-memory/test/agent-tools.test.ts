@@ -84,11 +84,48 @@ describe("hook/MCP feedback loop", () => {
 		await handleHook(store, { ...input, hook_event_name: "Stop" }, fetcher); await deliverUsage(store, fetcher);
 		expect(requests.some((request) => request.path === "/ingest/picks")).toBe(false);
 	});
-	it("continues durable capture even if recall is unavailable", async () => {
-		const { store, input } = await fixture();
+	it("silently preserves capture and unknown feedback across repeated recall failures", async () => {
+		const { store, input, client, fetcher, requests } = await fixture();
 		writeFileSync(input.transcript_path, '{"type":"user","message":{"role":"user","content":"experience"}}\n');
-		const result = await handleHook(store, input, (async () => { throw new Error("offline"); }) as typeof fetch);
-		expect(result.systemMessage).toContain("capture continues"); expect(store.batch()).toHaveLength(1);
+		for (let i = 0; i < 2; i++) {
+			const result = await handleHook(store, input, (async () => { throw new Error("SECRET_TRANSPORT_CANARY"); }) as typeof fetch);
+			expect(result).toEqual({});
+		}
+		expect(store.batch()).toHaveLength(1);
+		expect(store.status().recall).toMatchObject({ status: "unavailable", failures: 2, lastError: { kind: "unavailable" } });
+		const status = await client.callTool({ name: "memory_status", arguments: {} });
+		expect(JSON.stringify(status)).not.toContain("SECRET_TRANSPORT_CANARY");
+		await handleHook(store, { ...input, hook_event_name: "Stop" }, fetcher);
+		await deliverUsage(store, fetcher);
+		expect(requests.some((r) => r.path === "/ingest/picks")).toBe(false);
+		expect(store.db.prepare("SELECT state FROM receipts").all()).toEqual([{ state: "unknown" }]);
+	});
+	it("reloads YAML notification preferences and exposes failure/recovery diagnostics", async () => {
+		const { store, input, fetcher } = await fixture();
+		const settings = join(store.home, "settings.yaml");
+		writeFileSync(settings, "notifications:\n  recall_errors: true\n");
+		const failed = await handleHook(store, input, (async () => new Response("SECRET_BODY", { status: 503 })) as typeof fetch);
+		expect(failed.systemMessage).toContain("Loom recall is unavailable");
+		expect(store.status().recall).toMatchObject({ status: "unavailable", lastError: { kind: "http", httpStatus: 503 } });
+		expect(JSON.stringify(store.status())).not.toContain("SECRET_BODY");
+		writeFileSync(settings, "notifications:\n  recall_errors: false\n");
+		expect(await handleHook(store, input, (async () => { throw new DOMException("timeout", "TimeoutError"); }) as typeof fetch)).toEqual({});
+		expect(store.status().recall).toMatchObject({ status: "unavailable", lastError: { kind: "timeout" } });
+		const recovered = await handleHook(store, input, fetcher);
+		expect(recovered.systemMessage).toBeUndefined(); expect(recovered.hookSpecificOutput).toBeDefined();
+		expect(store.status().recall).toMatchObject({ status: "ok", failures: 0, lastSuccessAt: expect.any(Number), lastFailureAt: expect.any(Number) });
+	});
+	it.each([
+		["notifications: [SECRET_YAML", "invalid_yaml"],
+		['notifications:\n  recall_errors: "false"\n', "invalid_settings"],
+	])("keeps a broken settings file quiet without blocking capture (%s)", async (yaml, code) => {
+		const { store, input } = await fixture();
+		writeFileSync(join(store.home, "settings.yaml"), yaml);
+		writeFileSync(input.transcript_path, '{"type":"user","message":{"role":"user","content":"retained"}}\n');
+		expect(await handleHook(store, input, (async () => Response.json({ unexpected: true })) as typeof fetch)).toEqual({});
+		expect(store.status()).toMatchObject({ settingsError: code, notifications: { recall_errors: false }, recall: { lastError: { kind: "invalid_response" } } });
+		expect(JSON.stringify(store.status())).not.toContain("SECRET_YAML");
+		expect(store.batch()).toHaveLength(1);
 	});
 	it("captures a completed subagent without completing the parent's staged feedback", async () => {
 		const { store, client, receipt, input, fetcher, requests } = await fixture();

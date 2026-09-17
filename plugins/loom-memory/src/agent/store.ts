@@ -3,6 +3,7 @@ import { mkdirSync, chmodSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { accountKey, digest, type Config } from "./config.js";
+import { readSettings } from "./settings.js";
 
 export interface Episode {
 	idempotency_key: string;
@@ -123,6 +124,8 @@ export class Store {
 	}
 	status(): Record<string, unknown> {
 		return {
+			...readSettings(this.home),
+			recall: this.get("recall", { status: "not_attempted" }),
 			queue: this.db.prepare("SELECT COUNT(*) events,COALESCE(SUM(bytes),0) bytes,MIN(queued_at) oldest_queued_at FROM outbox").get(),
 			sources: this.db.prepare("SELECT COUNT(*) total,SUM(error IS NOT NULL) blocked FROM sources").get(),
 			blockedSources: this.db.prepare("SELECT id,offset,error FROM sources WHERE error IS NOT NULL LIMIT 20").all(),

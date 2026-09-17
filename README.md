@@ -54,6 +54,19 @@ codex plugin add loom-memory@loom-plugins
 
 **Compatibility:** Version 0.2.1 was verified through native marketplace installation in Codex 0.154.0: both MCP servers loaded, all eight hooks were enabled/trusted, and the existing browser login connected the collector to the production account without copying tokens. Version 0.2.0 used a Claude-only path variable that native Codex did not expand; upgrade to 0.2.1 or later. Start a new conversation to load the updated tools/hooks and check `memory_status`. Direct registration remains available for other hosts; choose one installation path to avoid duplicate hooks. See [the verification scope](docs/AUTH_TEST.md).
 
+## Quiet operation and notifications
+
+Automatic recall failures are quiet by default. To show their hook warnings, create `~/.loom/agent-memory/settings.yaml` (or `settings.yaml` under `LOOM_MEMORY_HOME`):
+
+```yaml
+notifications:
+  recall_errors: true
+```
+
+Set `recall_errors: false` to hide them again. The file is optional and reloaded on each prompt; no restart is needed for preference changes. This controls recall warnings, not experience collection, successful recall context, or memory-use reporting. Capture/configuration problems that need recovery keep their existing warnings. Private credentials remain in `config.json`; do not put them in this YAML file.
+
+`memory_status` retains recall status, consecutive failure count, success/failure timestamps and a sanitized error category (including HTTP status or timeout). The last failure remains visible after recovery, with current status `ok`. A malformed settings file falls back to quiet mode and reports `settingsError` in status without blocking capture. Only this installation's settings file is read, never project YAML.
+
 ## Check delivery and update
 
 ```sh

@@ -15,11 +15,13 @@ afterEach(async () => { for (const fn of cleanup.splice(0).reverse()) await fn()
 it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch receiver", async () => {
 	const dir = mkdtempSync(join(tmpdir(), "loom-bundle-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
 	const received: Array<{ path: string; body: any; authorization: string | undefined }> = [];
+	let failRecall = false;
 	const http = createServer(async (req, res) => {
 		const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
 		const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 		received.push({ path: req.url!, body, authorization: req.headers.authorization });
 		res.setHeader("content-type", "application/json");
+		if (req.url === "/retrieve" && failRecall) { res.statusCode = 503; res.end("{}"); return; }
 		if (req.url === "/retrieve") res.end(JSON.stringify({ candidate_lines: ['<knowledge id="7">Remember the prior outage</knowledge>'], candidates: [{ ref: "kn:7", label: "outage" }] }));
 		else if (req.url === "/ingest/episodes/batch") res.end(JSON.stringify({ results: body.episodes.map((ep: any, i: number) => ({ idempotency_key: ep.idempotency_key, episode_id: i + 1 })), inserted: body.episodes.length, skipped: 0 }));
 		else res.end(JSON.stringify({ ok: true }));
@@ -64,6 +66,22 @@ it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch
 	expect(batch.body.episodes[0].content).toBe(raw);
 	const status = await client.callTool({ name: "memory_status", arguments: {} });
 	expect(JSON.stringify(status)).not.toContain("fixture-token");
+	// Real installed hook processes reload YAML and keep failures inspectable
+	// through the already-running MCP, without adding user-visible noise.
+	failRecall = true;
+	const failedHook = async () => {
+		const child = spawn(process.execPath, [join(bundle, "dist/cli.js"), "hook"], { env, stdio: ["pipe", "pipe", "pipe"] });
+		const chunks: Buffer[] = []; child.stdout.on("data", chunk => chunks.push(chunk)); child.stderr.resume();
+		child.stdin.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "test-session", transcript_path: transcript, prompt: "recall unavailable" }));
+		expect(await new Promise<number | null>(done => child.on("exit", done))).toBe(0);
+		return JSON.parse(Buffer.concat(chunks).toString());
+	};
+	expect(await failedHook()).toEqual({});
+	writeFileSync(join(home, "settings.yaml"), "notifications:\n  recall_errors: true\n");
+	expect((await failedHook()).systemMessage).toContain("Loom recall is unavailable");
+	const failureStatus = await client.callTool({ name: "memory_status", arguments: {} });
+	const statusContent = failureStatus.content as Array<{ type: string; text: string }>;
+	expect(JSON.parse(statusContent[0]!.text).recall.lastError).toEqual({ kind: "http", httpStatus: 503 });
 }, 15_000);
 
 

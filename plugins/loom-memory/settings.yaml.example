@@ -1,0 +1,4 @@
+# Copy to ~/.loom/agent-memory/settings.yaml (or $LOOM_MEMORY_HOME/settings.yaml).
+# Reloaded on each prompt; capture and recall remain enabled.
+notifications:
+  recall_errors: false
