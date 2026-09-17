@@ -33298,7 +33298,7 @@ var Routing = class {
         base.db.prepare("UPDATE project_sessions SET file=? WHERE session=?").run(file2, session);
         return { switched: false, graph: graph ?? "personal", file: file2 };
       }
-      const sources = current.sources().filter((source) => !source.sealed && (source.session === session || source.session.startsWith(`${session}:agent:`)));
+      const sources = current.sources().filter((source) => !source.sealed && source.session === session);
       for (const source of sources) {
         for (let i = 0; i < 100; i++) {
           collect(current, source.id);

@@ -127,12 +127,14 @@ it("switches A → B → A without replaying history, retains old receipts, and 
  const runtime = createRuntime(home, (async () => Response.json({ candidate_lines: ['<knowledge id="7">evidence</knowledge>'], candidates: [{ref:"kn:7"}] })) as typeof fetch);
  cleanup.push(() => runtime.close());
  const a = (await runtime.routing.select({ session: "switch", cwd: home })).store;
+ const completedChild = a.source("switch:agent:completed", join(home,"removed-child.jsonl")); a.markEnded(completedChild.session);
  const input = { session_id: "switch", cwd: home, transcript_path: transcript, hook_event_name: "UserPromptSubmit", prompt: "question" };
  const output = await handleHook(a, input, (async () => Response.json({ candidate_lines: ['<knowledge id="7">evidence</knowledge>'], candidates: [{ref:"kn:7"}] })) as typeof fetch);
  const receipt = ((output.hookSpecificOutput as any).additionalContext as string).match(/Receipt: ([\w-]+)/)![1]!;
  await runtime.routing.switchGraph({ receipt }, "acme/b");
  const b = (await runtime.routing.select({ session: "switch" })).store;
  expect(b.config.graph).toBe("acme/b");
+ expect(b.sources().some(source=>source.session==="switch:agent:completed")).toBe(false);
  expect((await runtime.routing.select({ receipt })).store.config.graph).toBe("acme/a");
  writeFileSync(transcript, record("before") + record("middle"));
  await handleHook(b, { ...input, hook_event_name: "PostToolUse" });

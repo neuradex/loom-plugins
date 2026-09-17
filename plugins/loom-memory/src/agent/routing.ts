@@ -133,7 +133,8 @@ export class Routing {
 			const current = this.open({ ...base.config, graph: binding.graph ?? undefined });
 			const file = binding.file ?? join(binding.cwd, ".loom.yml");
 			if ((binding.graph ?? null) === graph) { writeProjectGraph(file, graph); base.db.prepare("UPDATE project_sessions SET file=? WHERE session=?").run(file, session); return { switched: false, graph: graph ?? "personal", file }; }
-			const sources = current.sources().filter(source => !source.sealed && (source.session === session || source.session.startsWith(`${session}:agent:`)));
+			// Completed subagent sources stay with their original graph and drain there.
+			const sources = current.sources().filter(source => !source.sealed && source.session === session);
 			for (const source of sources) {
 				// A bounded catch-up ensures we never skip old experience to switch quickly.
 				for (let i = 0; i < 100; i++) {
