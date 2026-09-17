@@ -52,7 +52,7 @@ codex plugin marketplace add neuradex/loom-plugins
 codex plugin add loom-memory@loom-plugins
 ```
 
-**Compatibility:** Codex 0.154.0 was verified through direct MCP/hooks. In the earlier live test, a marketplace-installed plugin appeared installed/enabled but was not loaded by `codex exec`. Marketplace registration alone is not evidence that capture is active. Use `memory_status` and a new conversation to check your host. Choose either the marketplace path or direct registration to avoid duplicate hooks.
+**Compatibility:** Version 0.2.1 was verified through native marketplace installation in Codex 0.154.0: both MCP servers loaded, all eight hooks were enabled/trusted, and the existing browser login connected the collector to the production account without copying tokens. Version 0.2.0 used a Claude-only path variable that native Codex did not expand; upgrade to 0.2.1 or later. Start a new conversation to load the updated tools/hooks and check `memory_status`. Direct registration remains available for other hosts; choose one installation path to avoid duplicate hooks. See [the verification scope](docs/AUTH_TEST.md).
 
 ## Check delivery and update
 
