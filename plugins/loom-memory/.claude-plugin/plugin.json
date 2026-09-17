@@ -1,6 +1,6 @@
 {
   "name": "loom-memory",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Automatically capture coding experiences and recall Loom memory.",
   "author": {
     "name": "Neuradex"

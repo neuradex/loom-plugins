@@ -1,17 +1,23 @@
 // Exercise an installed, standalone bundle without repository dependencies or credentials.
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { resolve, join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-const plugin = resolve(process.argv[2] ?? 'plugins/loom-memory');
+const sourcePlugin = resolve(process.argv[2] ?? 'plugins/loom-memory');
 const home = await mkdtemp(join(tmpdir(), 'loom-installed-smoke-'));
+const plugin = join(home, 'installed plugin with spaces');
 let child;
 try {
+  await cp(sourcePlugin, plugin, {recursive:true});
   await writeFile(join(home, 'config.json'), JSON.stringify({token:'synthetic-smoke-token',url:'http://127.0.0.1:1',capture:false,recall:false}), {mode:0o600});
-  child = spawn(process.execPath, [join(plugin,'dist/cli.js'),'mcp'], {
-    cwd:home, env:{PATH:process.env.PATH,LOOM_MEMORY_HOME:home}, stdio:['pipe','pipe','pipe'],
+  // Exercise the actual native Codex manifest. Codex resolves relative cwd
+  // against the installed plugin, but does not expand Claude variables in args.
+  const manifest = JSON.parse(await readFile(join(plugin,'.codex-plugin/plugin.json'),'utf8'));
+  const config = manifest.mcpServers['loom-memory'];
+  child = spawn(config.command === 'node' ? process.execPath : config.command, config.args, {
+    cwd:config.cwd ? resolve(plugin,config.cwd) : home, env:{PATH:process.env.PATH,LOOM_MEMORY_HOME:home}, stdio:['pipe','pipe','pipe'],
   });
   const pending = new Map();
   const lines = createInterface({input:child.stdout});
@@ -30,7 +36,7 @@ try {
   const tools=await call(2,'tools/list',{});
   assert.deepEqual(tools.tools.map(x=>x.name).sort(),['complete_connection','memory_read','memory_search','memory_status','remember','report_memory_use']);
   const result=await call(3,'tools/call',{name:'memory_status',arguments:{}});
-  assert(!result.isError);assert.equal(JSON.parse(result.content[0].text).queue.events,0);
+  assert(!result.isError, JSON.stringify(result));assert.equal(JSON.parse(result.content[0].text).queue.events,0);
   assert(!JSON.stringify(result).includes('synthetic-smoke-token'));
   console.log('Installed bundle: MCP initialize, six tools, and memory_status passed without node_modules or external services.');
 } finally {
