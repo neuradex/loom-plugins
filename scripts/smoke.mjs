@@ -28,11 +28,11 @@ try {
   await call(1,'initialize',{protocolVersion:'2024-11-05',capabilities:{},clientInfo:{name:'distribution-smoke',version:'1'}});
   child.stdin.write(JSON.stringify({jsonrpc:'2.0',method:'notifications/initialized'})+'\n');
   const tools=await call(2,'tools/list',{});
-  assert.deepEqual(tools.tools.map(x=>x.name).sort(),['memory_read','memory_search','memory_status','remember','report_memory_use']);
+  assert.deepEqual(tools.tools.map(x=>x.name).sort(),['complete_connection','memory_read','memory_search','memory_status','remember','report_memory_use']);
   const result=await call(3,'tools/call',{name:'memory_status',arguments:{}});
   assert(!result.isError);assert.equal(JSON.parse(result.content[0].text).queue.events,0);
   assert(!JSON.stringify(result).includes('synthetic-smoke-token'));
-  console.log('Installed bundle: MCP initialize, five tools, and memory_status passed without node_modules or external services.');
+  console.log('Installed bundle: MCP initialize, six tools, and memory_status passed without node_modules or external services.');
 } finally {
   if(child && child.exitCode===null){
     const exited=new Promise(done=>child.once('exit',done));child.kill('SIGTERM');

@@ -1,10 +1,11 @@
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { dataHome, readConfig, saveConfig } from "./config.js";
+import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
 import { Store } from "./store.js";
 import { drain } from "./delivery.js";
 import { handleHook, startFinalDrain } from "./hooks.js";
-import { createAgentServer, deliverUsage } from "./server.js";
+import { deliverUsage } from "./server.js";
+import { connectionHook, createRuntime } from "./runtime.js";
 
 process.umask(0o077);
 async function stdin(): Promise<unknown> {
@@ -25,25 +26,30 @@ async function main(): Promise<void> {
 	if (!["hook", "mcp", "flush", "status"].includes(command ?? "")) {
 		console.log("Usage: node cli.js configure < config.json | mcp | hook | flush | status"); return;
 	}
-	const store = new Store(dataHome(), await readConfig());
 	if (command === "mcp") {
-		const server = createAgentServer(store);
-		let busy = false;
-		const pump = async () => {
-			if (busy) return; busy = true;
-			try { await drain(store); await deliverUsage(store); }
-			catch { console.error("Loom background collector failed; queued experience is retained. Check memory_status."); }
-			finally { busy = false; }
-		};
-		const timer = setInterval(() => { void pump(); }, 1000);
-		server.server.onclose = () => { clearInterval(timer); process.exit(0); };
-		await server.connect(new StdioServerTransport());
-		void pump(); return;
+		const runtime = createRuntime();
+		const timer = setInterval(() => { void runtime.pump(); }, 1000);
+		runtime.server.server.onclose = () => { clearInterval(timer); process.exit(0); };
+		await runtime.server.connect(new StdioServerTransport());
+		void runtime.pump(); return;
 	}
+	if (command === "status") {
+		const runtime = createRuntime();
+		try { console.log(JSON.stringify(await runtime.status(), null, 2)); } finally { runtime.close(); }
+		return;
+	}
+	const input = command === "hook" ? await stdin() as Record<string, unknown> : undefined;
+	let config;
+	try { config = await readConfig(); }
+	catch (error) {
+		if (input && error instanceof NotConnectedError) { console.log(JSON.stringify(await connectionHook(input))); return; }
+		throw error;
+	}
+	const store = new Store(dataHome(), config);
 	try {
-		if (command === "hook") {
-			const input = await stdin() as Record<string, unknown>;
-			console.log(JSON.stringify(await handleHook(store, input)));
+		if (input) {
+			const output = await handleHook(store, input);
+			console.log(JSON.stringify(config.oauth?.needsReconnect ? { ...output, ...await connectionHook(input) } : output));
 			if (input.hook_event_name === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
 		} else if (command === "flush") {
 			await drain(store, fetch, true); await deliverUsage(store);

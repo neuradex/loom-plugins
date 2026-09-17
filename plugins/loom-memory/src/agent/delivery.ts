@@ -1,19 +1,32 @@
 import { randomUUID } from "node:crypto";
 import { collectAll } from "./collector.js";
 import { Store } from "./store.js";
+import { accessToken } from "./auth.js";
 
 interface DeliveryState { retryAt: number; failures: number; lastSuccess: number; error?: string }
 export class DeliveryError extends Error {
 	constructor(readonly status: number, readonly retryAfterMs = 0) { super(`Memory API HTTP ${status}`); }
 }
+export class CredentialUnavailableError extends Error {
+	constructor() { super("Loom authentication is unavailable; the request was not sent."); }
+}
 
 export async function api<T>(store: Store, path: string, body: unknown, fetcher = fetch, timeoutMs = 10_000): Promise<T> {
-	const response = await fetcher(`${store.config.url}${path}`, {
+	const credential = async (rejected?: string) => {
+		try { return await accessToken(store.home, store.config, fetcher, rejected); }
+		catch { throw new CredentialUnavailableError(); }
+	};
+	const token = await credential();
+	const send = (credential: string) => fetcher(`${store.config.url}${path}`, {
 		method: "POST", headers: {
-			authorization: `Bearer ${store.config.token}`, "content-type": "application/json",
+			authorization: `Bearer ${credential}`, "content-type": "application/json",
 			...(store.config.graph ? { "x-loom-graph": store.config.graph } : {}),
 		}, body: JSON.stringify(body), signal: AbortSignal.timeout(timeoutMs), redirect: "error",
 	});
+	let response = await send(token);
+	// An explicit 401 means the request was rejected before ingestion, so one
+	// refreshed retry is safe even for non-idempotent feedback.
+	if (response.status === 401 && store.config.oauth) response = await send(await credential(token));
 	if (!response.ok) {
 		const retry = response.headers.get("retry-after");
 		const ms = retry ? (/^\d+(\.\d+)?$/.test(retry) ? Number(retry) * 1000 : Date.parse(retry) - Date.now()) : 0;

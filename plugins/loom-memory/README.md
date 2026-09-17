@@ -17,25 +17,13 @@ npm ci
 npm run build
 ```
 
-Configure with a private JSON file outside your repository, containing a Loom API token with `memory:read` and `memory:write` scopes:
+Install the plugin and authenticate the remote `loom` MCP through the host's Loom browser-login action. The plugin's setup context lets the assistant connect the local collector using `connect_collector` and `complete_connection`. There is no separate token-copy or `configure` step. Local tools stay available while login is pending and adopt the completed enrollment without restarting.
 
-```json
-{
-  "token": "YOUR_LOOM_TOKEN",
-  "url": "https://api.neuradex.ai",
-  "capture": true,
-  "recall": true
-}
-```
+The remote MCP remains independently usable. The bundled local helper adds full capture, prompt recall and explicit feedback. The default graph is personal. Capture begins after the authenticated connection is verified; installation before login does not upload transcripts.
 
-```sh
-node plugins/loom-memory/dist/cli.js configure < /absolute/path/to/private-config.json
-node plugins/loom-memory/dist/cli.js status
-```
+Credentials are delegated as JWE ciphertext to a temporary key held only on this machine. They are decrypted locally, verified through the public MCP, and saved with mode 0600 under `~/.loom/agent-memory/`. `LOOM_MEMORY_HOME` overrides this path and must match for hooks and the local MCP. Configuration is never loaded from a project directory. Access tokens refresh automatically under a cross-process lock, while the queue identity remains endpoint + user + graph. A revoked grant asks the assistant to reconnect and retains the queue. Different accounts cannot reuse an existing enrollment.
 
-`configure` enrolls this machine in automatic full capture. The default graph is personal. An optional `graph` field selects an authorized shared graph; the existing server enforces graph membership and private-original/team-stub storage. Do not put tokens in plugin manifests, source control, command-line arguments, or chat messages.
-
-The configuration and durable database live in `~/.loom/agent-memory/`. `LOOM_MEMORY_HOME` overrides that path and must be the same for hooks and MCP processes. Configuration is read from this location, never from an untrusted project's config file. Account state is isolated by endpoint, graph and credential. Drain a backlog before rotating credentials; old account queues remain on disk and are never sent using a different credential.
+`configure` remains only for legacy installations and isolated test fixtures; it is not the normal installation flow. Legacy queues retain their token-based identity and are not silently migrated into OAuth accounts.
 
 Deploy the accompanying server change that classifies `capture_record` as stored audit material without a retrieval channel before enabling capture against production. Native message and tool episode behavior is unchanged.
 
@@ -47,7 +35,7 @@ Use the built plugin directory:
 claude --plugin-dir /absolute/path/to/nd-cloud/plugins/loom-memory
 ```
 
-Start a new session after configuring. This plugin bundles its MCP server and hooks. Do not also register a second copy of its hooks manually.
+Start a new session after installing. Authenticate Loom when the host requests it. This plugin bundles its MCP server and hooks. Do not also register a second copy of its hooks manually.
 
 ## Load in Codex
 

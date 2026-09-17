@@ -1,9 +1,12 @@
 # Merge into your existing Codex config; do not overwrite other hook entries.
 # Replace /absolute/path/to/loom-memory with the built plugin directory.
-# Configure enrollment first with: node <plugin>/dist/cli.js configure
+# Authenticate the remote loom MCP in Codex; the plugin completes local enrollment automatically.
 
 [features]
 hooks = true
+
+[mcp_servers.loom]
+url = "https://api.neuradex.ai/mcp"
 
 [mcp_servers.loom_memory]
 command = "node"

@@ -4,47 +4,30 @@ Automatic experience capture and memory recall for Claude Code and Codex. The cl
 
 This repository contains the client source, ready-to-run bundles, and both hosts' marketplace catalogs. The Memory API and graph-processing services run separately.
 
-## Requirements and enrollment
+## Requirements and login
 
 - Node.js **22.13 or later** on the machine running your coding agent.
-- A Loom API token with `memory:read` and `memory:write` scopes. Browser login/token issuance is not included in this first release.
-- A compatible Loom Memory API deployment, including support for storing `capture_record` episodes without offering them as conversational recall candidates.
+- A Loom account and a host that supports MCP OAuth, local MCP processes and hooks.
+- Server support for `connect_collector` and `capture_record` episodes. The matching server change is [nd-cloud #540](https://github.com/neuradex/nd-cloud/pull/540); deploy it before activating this release.
 
-The bundle is committed, so installation does **not** require npm, a compiler, or access to another repository.
+The bundle is committed: installation does not require npm or a compiler.
 
-```sh
-git clone https://github.com/neuradex/loom-plugins.git
-cd loom-plugins
-```
+Install the plugin, then authenticate **Loom** in the host's MCP authentication UI. The assistant completes the local collector connection automatically. There is no API-key copy, private JSON preparation, or `configure` command in the normal flow.
 
-Create a private JSON file **outside this checkout**, with the following structure and your own token:
+The remote MCP works on its own. The plugin adds a local helper for capture, prompt recall, receipts and delivery status. After login, the helper receives an encrypted, renewable credential for the same Loom account. Only the local installation can decrypt it; the assistant does not receive readable tokens. Automatic capture starts in the personal graph after verification. A revoked or expired grant triggers reconnection while retaining queued experience.
 
-```json
-{
-  "token": "YOUR_LOOM_TOKEN",
-  "url": "https://api.neuradex.ai",
-  "capture": true,
-  "recall": true
-}
-```
-
-```sh
-node plugins/loom-memory/dist/cli.js configure < /absolute/path/to/private-config.json
-node plugins/loom-memory/dist/cli.js status
-```
-
-Enrollment enables capture for sessions connected to these hooks. Available messages, tool inputs/results and other transcript records may contain project information; they are sent to your configured Loom graph. Credentials and the durable queue stay under `~/.loom/agent-memory/`, outside the plugin cache. `LOOM_MEMORY_HOME` can select another directory; use the same value for hooks, MCP, and configuration commands. Enrollment does not crawl old, unrelated sessions.
+Capture covers sessions connected to the installed hooks, including available messages and tool inputs/results. It does not crawl unrelated historical sessions. Credentials and the durable queue live under `~/.loom/agent-memory/`, outside the plugin cache. `LOOM_MEMORY_HOME` can override that location consistently for hooks and local MCP.
 
 ## Claude Code
 
-After enrollment, run these commands inside Claude Code:
+Run these commands inside Claude Code:
 
 ```text
 /plugin marketplace add neuradex/loom-plugins
 /plugin install loom-memory@loom-plugins
 ```
 
-Review the requested plugin capabilities and start a new session. The package includes its MCP server and hooks. Do not additionally register the same hooks by hand.
+Review the requested plugin capabilities and start a new session. The package includes the remote Loom MCP, its local collector helper, and hooks. Authenticate Loom when prompted. Do not additionally register the same hooks by hand.
 
 For a local checkout, the equivalent development entry point is:
 
@@ -54,7 +37,7 @@ claude --plugin-dir /absolute/path/to/loom-plugins/plugins/loom-memory
 
 ## Codex
 
-The verified path is explicit MCP and hook configuration. From your permanent checkout, generate configuration containing its actual absolute path:
+Install from the marketplace commands below, authenticate Loom, and start a new thread. For hosts requiring explicit MCP and hook configuration, from your permanent checkout, generate configuration containing its actual absolute path:
 
 ```sh
 node scripts/codex-config.mjs
@@ -80,7 +63,7 @@ node plugins/loom-memory/dist/cli.js flush
 
 `flush` handles one bounded batch; the running MCP server keeps draining. An empty backlog confirms delivery, while blocked sources and failed delivery state need attention. It does not by itself prove that downstream extraction or a future recall succeeded.
 
-For Claude Code, refresh the marketplace and update the plugin through `/plugin`. For Codex direct registration, update this checkout with `git pull --ff-only` and restart the session. Published plugin changes bump the plugin version; Git tags can pin a release. Removing a plugin or its configuration does not delete your saved memories or local queue. Drain pending capture before changing credentials, because queues are isolated by account identity.
+For Claude Code, refresh the marketplace and update the plugin through `/plugin`. For Codex direct registration, update this checkout with `git pull --ff-only` and restart the session. Published plugin changes bump the plugin version; Git tags can pin a release. Removing a plugin or its configuration does not delete your saved memories or local queue. OAuth refresh preserves the same account queue. Switching accounts requires a separate enrollment; existing queued experience is never assigned to the newly signed-in account.
 
 ## Behavior and evidence
 
@@ -89,7 +72,7 @@ For Claude Code, refresh the marketplace and update the plugin through `/plugin`
 - Prompt hooks offer memories; explicit usage reports feed back only after turn completion. Missing reports stay unknown.
 - Raw exposed records are retained, including unfamiliar record types. Hidden reasoning, unexposed host events and external attachment bytes are not promised.
 
-See [public installation verification](docs/INSTALL_TEST.md), [the detailed client contract](plugins/loom-memory/README.md) and [local live-test evidence](docs/LOCAL_TEST.md), including actual Claude/Codex sessions, vector retrieval, and a 20-user batch/replay test. Those tests do not establish production capacity or universal host compatibility.
+See [browser-login verification](docs/AUTH_TEST.md), [public installation verification](docs/INSTALL_TEST.md), [the detailed client contract](plugins/loom-memory/README.md) and [local live-test evidence](docs/LOCAL_TEST.md), including actual Claude/Codex sessions, vector retrieval, and a 20-user batch/replay test. Those tests do not establish production capacity or universal host compatibility.
 
 ## Development
 

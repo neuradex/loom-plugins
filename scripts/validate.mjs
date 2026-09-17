@@ -15,6 +15,8 @@ assert.equal(x.plugins[0].source.path, `./${base}`);
 assert.equal(x.plugins[0].policy.installation, 'AVAILABLE');
 assert.equal(x.plugins[0].policy.authentication, 'ON_INSTALL');
 const mcp = await json(`${base}/.mcp.json`);
+assert.equal(mcp.mcpServers.loom.url, 'https://api.neuradex.ai/mcp');
+assert.equal(mcp.mcpServers.loom.type, 'http');
 assert.equal(mcp.mcpServers['loom-memory'].args[0], '${CLAUDE_PLUGIN_ROOT}/dist/cli.js');
 assert.equal((await json(`${base}/hooks/hooks.json`)).hooks.SessionEnd[0].hooks[0].timeout, 3);
 for (const file of ['dist/cli.js','THIRD_PARTY_NOTICES.txt','skills/loom-memory/SKILL.md']) assert((await stat(`${base}/${file}`)).size > 0);

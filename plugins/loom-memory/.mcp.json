@@ -1,5 +1,9 @@
 {
   "mcpServers": {
+    "loom": {
+      "type": "http",
+      "url": "https://api.neuradex.ai/mcp"
+    },
     "loom-memory": {
       "command": "node",
       "args": [

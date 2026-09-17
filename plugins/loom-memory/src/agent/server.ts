@@ -1,8 +1,9 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
-import { api } from "./delivery.js";
+import { api, CredentialUnavailableError, DeliveryError } from "./delivery.js";
 import { Store } from "./store.js";
 import { digest } from "./config.js";
+import { accessToken } from "./auth.js";
 import { USAGE_GUIDANCE } from "./hooks.js";
 import { createMemoryClient } from "../memory.js";
 
@@ -25,40 +26,41 @@ function expose(store: Store, id: string | undefined, refs: string[]): void {
 	});
 }
 
-export function createAgentServer(store: Store, fetcher = fetch): McpServer {
-	const server = new McpServer({ name: "loom-memory", version: "0.1.0" }, { instructions: USAGE_GUIDANCE });
-	const memory = createMemoryClient(store.config.url, { fetch: fetcher });
-	const auth = { token: store.config.token, ...(store.config.graph ? { graph: store.config.graph } : {}) };
+export function createAgentServer(source: Store | (() => Promise<Store>), fetcher = fetch, status?: () => Promise<unknown>): McpServer {
+	const server = new McpServer({ name: "loom-memory", version: "0.2.0" }, { instructions: USAGE_GUIDANCE });
+	const getStore = async () => typeof source === "function" ? source() : source;
+	const memoryFor = (store: Store) => createMemoryClient(store.config.url, { fetch: fetcher });
+	const authFor = async (store: Store) => ({ token: await accessToken(store.home, store.config, fetcher), graph: store.config.graph });
 	const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
-	const run = async (fn: () => Promise<unknown> | unknown) => {
-		try { return json(await fn()); }
-		catch (error) { return { ...json({ error: error instanceof Error ? error.message : "Loom operation failed" }), isError: true }; }
+	const run = async (fn: (store: Store) => Promise<unknown> | unknown) => {
+		try { return json(await fn(await getStore())); }
+		catch (error) { return { ...json({ error: error instanceof Error && !["ZodError", "SyntaxError"].includes(error.name) ? error.message : "Invalid Loom configuration or response." }), isError: true }; }
 	};
 	server.registerTool("memory_search", {
 		description: "Search past experiences, decisions and knowledge in Loom. A result being read is not proof it was used.",
 		inputSchema: { query: z.string().min(1), receipt: receiptArg, limit: z.number().int().min(1).max(50).default(10) },
 		annotations: { readOnlyHint: true },
-	}, async ({ query, receipt, limit }) => run(async () => {
+	}, async ({ query, receipt, limit }) => run(async (store) => {
 		if (receipt) active(store, receipt);
-		const result = await memory.query(auth, { text: query, limit });
+		const result = await memoryFor(store).query(await authFor(store), { text: query, limit });
 		expose(store, receipt, result.results.map((hit) => hit.ref)); return result;
 	}));
 	server.registerTool("memory_read", {
 		description: "Read exact stored evidence using refs returned by recall or memory_search.",
 		inputSchema: { refs: z.array(ref).min(1).max(5), receipt: receiptArg }, annotations: { readOnlyHint: true },
-	}, async ({ refs, receipt }) => run(async () => {
+	}, async ({ refs, receipt }) => run(async (store) => {
 		if (receipt) active(store, receipt);
-		const result = await memory.read(auth, { refs, max_chars_per_item: 8000 });
+		const result = await memoryFor(store).read(await authFor(store), { refs, max_chars_per_item: 8000 });
 		expose(store, receipt, result.results.map((hit) => hit.ref)); return result;
 	}));
 	server.registerTool("remember", {
 		description: "Save a durable fact the user explicitly wants remembered. Search first. This writes user-sourced knowledge; do not use it for your own guesses. Experiences are captured automatically.",
 		inputSchema: { content: z.string().min(1), title: z.string().optional() }, annotations: { readOnlyHint: false, destructiveHint: false },
-	}, async ({ content, title }) => run(() => memory.remember(auth, { content, title })));
+	}, async ({ content, title }) => run(async (store) => memoryFor(store).remember(await authFor(store), { content, title })));
 	server.registerTool("report_memory_use", {
 		description: "Report the complete set of offered memories actually used on this turn, just before finishing. Empty means explicitly none. Only a completed turn sends feedback; a missing report stays unknown.",
 		inputSchema: { receipt: z.string().uuid(), picked: z.array(ref).max(64) }, annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
-	}, async ({ receipt: id, picked }) => run(() => store.transaction(() => {
+	}, async ({ receipt: id, picked }) => run((store) => store.transaction(() => {
 		const receipt = active(store, id);
 		const offered = new Set(JSON.parse(receipt.offered) as string[]);
 		if (picked.some((item) => !offered.has(item))) throw new Error("Report contains a memory not offered on this receipt. Read/search it with this receipt first.");
@@ -70,13 +72,18 @@ export function createAgentServer(store: Store, fetcher = fetch): McpServer {
 	server.registerTool("memory_status", {
 		description: "Show capture backlog, blocked sources and delivery state without exposing credentials or conversation content.",
 		inputSchema: {}, annotations: { readOnlyHint: true },
-	}, async () => run(() => store.status()));
+	}, async () => {
+		if (!status) return run((store) => store.status());
+		try { return json(await status()); }
+		catch { return { ...json({ error: "Loom status is temporarily unavailable. Existing queues are retained." }), isError: true }; }
+	});
 	return server;
 }
 
 /** Picks are not idempotent on the server. An ambiguous HTTP outcome is retained
  * as unknown, never blindly retried into duplicate reinforcement. */
 export async function deliverUsage(store: Store, fetcher = fetch): Promise<void> {
+	if (store.get("usageRetryAt", 0) > Date.now()) return;
 	const receipt = store.transaction(() => {
 		const row = store.db.prepare("SELECT * FROM receipts WHERE state='ready' LIMIT 1").get() as unknown as Receipt | undefined;
 		if (row) store.db.prepare("UPDATE receipts SET state='attempted' WHERE id=?").run(row.id);
@@ -92,5 +99,11 @@ export async function deliverUsage(store: Store, fetcher = fetch): Promise<void>
 			picked: JSON.parse(receipt.picked!), offered: JSON.parse(receipt.offered), context: receipt.context,
 		}, fetcher);
 		store.db.prepare("UPDATE receipts SET state='sent' WHERE id=?").run(receipt.id);
-	} catch { store.db.prepare("UPDATE receipts SET state='delivery_unknown' WHERE id=?").run(receipt.id); }
+	} catch (error) {
+		// No feedback reached the service if obtaining credentials failed, or the
+		// service explicitly denied authentication. Retain it for reconnection.
+		const denied = error instanceof CredentialUnavailableError || error instanceof DeliveryError && [401, 403].includes(error.status);
+		store.db.prepare("UPDATE receipts SET state=? WHERE id=?").run(denied ? "ready" : "delivery_unknown", receipt.id);
+		if (denied) store.set("usageRetryAt", Date.now() + 300_000);
+	}
 }
