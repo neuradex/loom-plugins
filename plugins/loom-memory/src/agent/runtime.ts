@@ -1,26 +1,24 @@
 import { z } from "zod";
-import { accountKey, dataHome, NotConnectedError, readConfig } from "./config.js";
+import { dataHome, NotConnectedError } from "./config.js";
 import { completeConnection, connectionRequest } from "./auth.js";
 import { Store } from "./store.js";
+import { Routing, type Scope } from "./routing.js";
+import { readSettings } from "./settings.js";
 import { createAgentServer, deliverUsage } from "./server.js";
 import { drain } from "./delivery.js";
 
 /** Keep stdio available before authentication and adopt enrollment without restarting. */
 export function createRuntime(home = dataHome(), fetcher = fetch) {
-	let store: Store | undefined;
+	const routing = new Routing(home);
 	let busy = false;
-	async function getStore(): Promise<Store> {
-		const config = await readConfig(home);
-		if (!store || accountKey(config) !== accountKey(store.config)) {
-			store?.close(); store = new Store(home, config);
-		} else Object.assign(store.config, config);
-		return store;
-	}
-	async function status(): Promise<unknown> {
+	async function getStore(scope: Scope = {}): Promise<Store> { return (await routing.select(scope)).store; }
+	async function status(scope: Scope = {}): Promise<unknown> {
 		try {
-			const current = await getStore();
+			const selected = scope.cwd || scope.receipt ? await routing.select(scope) : { store: await routing.base(), project: undefined };
+			const current = selected.store;
 			if (current.config.oauth?.needsReconnect) return { ...current.status(), connection: "authentication_required", request: await connectionRequest(home) };
-			return { ...current.status(), connection: "connected", account: current.config.userId, graph: current.config.graph ?? "personal" };
+			return { ...current.status(), ...readSettings(home, selected.project?.file), project: selected.project,
+				graphs: (await routing.all()).map(store => ({ graph: store.config.graph ?? "personal", ...store.status() })), connection: "connected", account: current.config.userId, graph: current.config.graph ?? "personal" };
 		} catch (error) {
 			if (error instanceof NotConnectedError) return { connection: "authentication_required", capture: false, request: await connectionRequest(home) };
 			throw error;
@@ -34,9 +32,11 @@ export function createRuntime(home = dataHome(), fetcher = fetch) {
 	}, async ({ encrypted }) => {
 		try {
 			await completeConnection(encrypted, home, fetcher);
-			const current = await getStore();
-			current.set("delivery", { retryAt: 0, failures: 0, lastSuccess: 0 });
-			current.set("usageRetryAt", 0);
+			const current = await routing.base();
+			for (const pending of await routing.all()) {
+				pending.set("delivery", { retryAt: 0, failures: 0, lastSuccess: 0 });
+				pending.set("usageRetryAt", 0);
+			}
 			return { content: [{ type: "text", text: JSON.stringify({ connected: true, capture: current.config.capture, recall: current.config.recall, graph: current.config.graph ?? "personal" }) }] };
 		} catch {
 			// Crypto/validation errors can embed key material. Never return them.
@@ -44,15 +44,15 @@ export function createRuntime(home = dataHome(), fetcher = fetch) {
 		}
 	});
 	return {
-		server, getStore, status,
-		async pump() {
+		server, getStore, status, routing,
+		async pump(force = false) {
 			if (busy) return;
 			busy = true;
-			try { const current = await getStore(); await drain(current, fetcher); await deliverUsage(current, fetcher); }
+			try { for (const current of await routing.all()) { await drain(current, fetcher, force); await deliverUsage(current, fetcher); } }
 			catch (error) { if (!(error instanceof NotConnectedError)) console.error("Loom collector is waiting for recovery; queued experience is retained."); }
 			finally { busy = false; }
 		},
-		close() { store?.close(); },
+		close() { routing.close(); },
 	};
 }
 

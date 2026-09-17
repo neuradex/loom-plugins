@@ -43,6 +43,7 @@ export class Store {
 			 queued_at INTEGER NOT NULL DEFAULT (unixepoch()*1000));
 			CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, session TEXT NOT NULL,
 			 context TEXT NOT NULL, offered TEXT NOT NULL, picked TEXT, state TEXT NOT NULL DEFAULT 'open');
+			CREATE TABLE IF NOT EXISTS project_sessions (session TEXT PRIMARY KEY, cwd TEXT NOT NULL, file TEXT, graph TEXT);
 			CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 		`);
 	}

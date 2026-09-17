@@ -1,10 +1,7 @@
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
-import { Store } from "./store.js";
-import { drain } from "./delivery.js";
+import { NotConnectedError, readConfig, saveConfig } from "./config.js";
 import { handleHook, startFinalDrain } from "./hooks.js";
-import { deliverUsage } from "./server.js";
 import { connectionHook, createRuntime } from "./runtime.js";
 
 process.umask(0o077);
@@ -45,17 +42,19 @@ async function main(): Promise<void> {
 		if (input && error instanceof NotConnectedError) { console.log(JSON.stringify(await connectionHook(input))); return; }
 		throw error;
 	}
-	const store = new Store(dataHome(), config);
+	const runtime = createRuntime();
 	try {
 		if (input) {
-			const output = await handleHook(store, input);
+			const { store, project } = await runtime.routing.select({ session: typeof input.session_id === "string" ? input.session_id : undefined,
+				cwd: typeof input.cwd === "string" ? input.cwd : undefined });
+			const output = await handleHook(store, input, fetch, project?.file);
 			console.log(JSON.stringify(config.oauth?.needsReconnect ? { ...output, ...await connectionHook(input) } : output));
 			if (input.hook_event_name === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
 		} else if (command === "flush") {
-			await drain(store, fetch, true); await deliverUsage(store);
-			console.log(JSON.stringify(store.status()));
-		} else console.log(JSON.stringify(store.status(), null, 2));
-	} finally { store.close(); }
+			await runtime.pump(true);
+			console.log(JSON.stringify(await runtime.status()));
+		} else console.log(JSON.stringify(await runtime.status(), null, 2));
+	} finally { runtime.close(); }
 }
 main().catch((error) => {
 	// Never print raw API payloads or config validation objects (which can hold tokens).

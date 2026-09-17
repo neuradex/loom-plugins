@@ -74,3 +74,8 @@ export async function atomicJson(path: string, value: unknown): Promise<void> {
 export function accountKey(config: Config): string {
 	return digest(JSON.stringify([config.url, config.graph ?? "", config.userId ? `user:${config.userId}` : config.token]));
 }
+
+// Authentication is shared across project graphs; queue ownership is not.
+export function credentialKey(config: Config): string {
+	return accountKey({ ...config, graph: undefined });
+}

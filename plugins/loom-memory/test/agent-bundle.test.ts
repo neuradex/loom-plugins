@@ -41,6 +41,7 @@ it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch
 	const hookCommand = hooks.hooks.UserPromptSubmit[0].hooks[0].command as string;
 	expect(hookCommand).toBe('node "${CLAUDE_PLUGIN_ROOT}/dist/cli.js" hook');
 	const env = { PATH: process.env.PATH!, LOOM_MEMORY_HOME: home };
+	writeFileSync(join(dir, ".loom.yml"), "graph: acme/bundle\n");
 	const invalid = spawn(process.execPath, [join(bundle, "dist/cli.js"), "configure"], { env, stdio: ["pipe", "pipe", "pipe"] });
 	const invalidOutput: Buffer[] = [];
 	invalid.stdout.on("data", (chunk) => invalidOutput.push(chunk)); invalid.stderr.on("data", (chunk) => invalidOutput.push(chunk));
@@ -50,7 +51,7 @@ it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch
 	const hook = spawn(process.execPath, [join(bundle, "dist/cli.js"), "hook"], { env, stdio: ["pipe", "pipe", "pipe"] });
 	const output: Buffer[] = []; const errors: Buffer[] = [];
 	hook.stdout.on("data", (chunk) => output.push(chunk)); hook.stderr.on("data", (chunk) => errors.push(chunk));
-	hook.stdin.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "test-session", transcript_path: transcript, prompt: "What happened before?" }));
+	hook.stdin.end(JSON.stringify({ cwd: dir, hook_event_name: "UserPromptSubmit", session_id: "test-session", transcript_path: transcript, prompt: "What happened before?" }));
 	const exit = await new Promise<number | null>((done) => hook.on("exit", done));
 	expect(exit, Buffer.concat(errors).toString()).toBe(0);
 	expect(JSON.parse(Buffer.concat(output).toString()).hookSpecificOutput.additionalContext).toContain("kn:7");
@@ -72,14 +73,14 @@ it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch
 	const failedHook = async () => {
 		const child = spawn(process.execPath, [join(bundle, "dist/cli.js"), "hook"], { env, stdio: ["pipe", "pipe", "pipe"] });
 		const chunks: Buffer[] = []; child.stdout.on("data", chunk => chunks.push(chunk)); child.stderr.resume();
-		child.stdin.end(JSON.stringify({ hook_event_name: "UserPromptSubmit", session_id: "test-session", transcript_path: transcript, prompt: "recall unavailable" }));
+		child.stdin.end(JSON.stringify({ cwd: dir, hook_event_name: "UserPromptSubmit", session_id: "test-session", transcript_path: transcript, prompt: "recall unavailable" }));
 		expect(await new Promise<number | null>(done => child.on("exit", done))).toBe(0);
 		return JSON.parse(Buffer.concat(chunks).toString());
 	};
 	expect(await failedHook()).toEqual({});
-	writeFileSync(join(home, "settings.yaml"), "notifications:\n  recall_errors: true\n");
+	writeFileSync(join(dir, ".loom.yml"), "graph: acme/bundle\nnotifications:\n  recall_errors: true\n");
 	expect((await failedHook()).systemMessage).toContain("Loom recall is unavailable");
-	const failureStatus = await client.callTool({ name: "memory_status", arguments: {} });
+	const failureStatus = await client.callTool({ name: "memory_status", arguments: { cwd: dir } });
 	const statusContent = failureStatus.content as Array<{ type: string; text: string }>;
 	expect(JSON.parse(statusContent[0]!.text).recall.lastError).toEqual({ kind: "http", httpStatus: 503 });
 }, 15_000);
@@ -92,12 +93,12 @@ it("connects a fresh installed bundle once and keeps capture/recall/feedback aft
  const secret = new TextEncoder().encode("local-issuer-fixture");
  const token = await new SignJWT({scope:"memory:read memory:write"}).setProtectedHeader({alg:"HS256"})
   .setSubject(userId).setAudience("mcp").setIssuedAt().setExpirationTime("1h").sign(secret);
- const received: Array<{path:string; body:any}> = [];
+ const received: Array<{path:string; body:any; graph:string | undefined}> = [];
  const http = createServer(async (req,res) => {
   try {
    await jwtVerify((req.headers.authorization ?? "").slice(7),secret,{audience:"mcp"});
    const chunks:Buffer[]=[];for await(const chunk of req)chunks.push(Buffer.from(chunk));
-   const body = JSON.parse(Buffer.concat(chunks).toString());received.push({path:req.url!,body});
+   const body = JSON.parse(Buffer.concat(chunks).toString());received.push({path:req.url!,body,graph:req.headers["x-loom-graph"] as string | undefined});
    res.setHeader("content-type","application/json");
    if(req.url==="/mcp")res.end(JSON.stringify({jsonrpc:"2.0",id:body.id,result:{content:[{type:"text",text:JSON.stringify({graphs:[{kind:"personal",id:userId}]})}]}}));
    else if(req.url==="/retrieve")res.end(JSON.stringify({candidate_lines:['<knowledge id="7">prior lesson</knowledge>'],candidates:[{ref:"kn:7"}]}));
@@ -133,7 +134,8 @@ it("connects a fresh installed bundle once and keeps capture/recall/feedback aft
  const completed=await client.callTool({name:"complete_connection",arguments:{encrypted}});expect(completed.isError).toBeUndefined();
  expect(JSON.stringify(completed)).not.toContain(token);
  const transcript=join(dir,"session.jsonl");writeFileSync(transcript,JSON.stringify({type:"user",message:{role:"user",content:"complete first experience"}})+"\n");
- const input={hook_event_name:"UserPromptSubmit",session_id:"fresh",transcript_path:transcript,prompt:"What was the prior lesson?"};
+ writeFileSync(join(dir,".loom.yml"), "graph: acme/backend\nnotifications:\n  recall_errors: false\n");
+ const input={cwd:dir,hook_event_name:"UserPromptSubmit",session_id:"fresh",transcript_path:transcript,prompt:"What was the prior lesson?"};
  const recalled=await hook(input);expect(recalled.systemMessage).toBeUndefined();
  const receipt=recalled.hookSpecificOutput.additionalContext.match(/Receipt: ([\w-]+)/)[1];
  expect((await client.callTool({name:"report_memory_use",arguments:{receipt,picked:["kn:7"]}})).isError).toBeUndefined();
@@ -142,6 +144,7 @@ it("connects a fresh installed bundle once and keeps capture/recall/feedback aft
  expect(received.find(x=>x.path==="/ingest/episodes/batch")!.body.episodes[0].content).toContain("complete first experience");
  await client.close();
  const restarted=await openClient();
- const result=await restarted.callTool({name:"memory_status",arguments:{}});
- expect(JSON.parse((result.content as any)[0].text)).toMatchObject({connection:"connected",account:userId,queue:{events:0}});
+ const result=await restarted.callTool({name:"memory_status",arguments:{receipt}});
+ expect(JSON.parse((result.content as any)[0].text)).toMatchObject({connection:"connected",account:userId,graph:"acme/backend",queue:{events:0}});
+ for(const request of received.filter(x=>x.path!=="/mcp"))expect(request.graph).toBe("acme/backend");
 },20000);

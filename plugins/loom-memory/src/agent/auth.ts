@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { randomBytes } from "node:crypto";
 import { compactDecrypt, decodeJwt, exportJWK, generateKeyPair, importJWK, type JWK } from "jose";
 import { z } from "zod";
-import { accountKey, atomicJson, dataHome, NotConnectedError, readConfig, saveConfig, validateConfig, type Config } from "./config.js";
+import { credentialKey, atomicJson, dataHome, NotConnectedError, readConfig, saveConfig, validateConfig, type Config } from "./config.js";
 
 const API_URL = "https://api.neuradex.ai";
 interface Pending { nonce: string; public_key: JWK; private_key: JWK; expiresAt: number }
@@ -96,10 +96,10 @@ export async function accessToken(home: string, current: Config, fetcher = fetch
 	if (!current.oauth) return current.token;
 	return authLock(home, async () => {
 		const latest = await readConfig(home);
-		if (accountKey(latest) !== accountKey(current) || !latest.oauth) throw new Error("Loom account changed; the old queue remains isolated.");
+		if (credentialKey(latest) !== credentialKey(current) || !latest.oauth) throw new Error("Loom account changed; the old queue remains isolated.");
 		if (latest.oauth.needsReconnect) throw new NotConnectedError();
 		if (latest.oauth.expiresAt > Date.now() + 60_000 && (!rejectedToken || latest.token !== rejectedToken)) {
-			Object.assign(current, latest); return latest.token;
+			Object.assign(current, { ...latest, graph: current.graph }); return latest.token;
 		}
 		const response = await fetcher(`${latest.url}/oauth/token`, {
 			method: "POST", headers: { "content-type": "application/x-www-form-urlencoded" },
@@ -117,6 +117,6 @@ export async function accessToken(home: string, current: Config, fetcher = fetch
 		checkIdentity(tokens.access_token, latest.userId!);
 		const updated = { ...latest, token: tokens.access_token,
 			oauth: { refreshToken: tokens.refresh_token, expiresAt: Date.now() + tokens.expires_in * 1000 } };
-		await saveConfig(updated, home); Object.assign(current, updated); return updated.token;
+		await saveConfig(updated, home); Object.assign(current, { ...updated, graph: current.graph }); return updated.token;
 	});
 }

@@ -1,0 +1,5 @@
+# Add to your project .loom.yml, shared with Loom CLI.
+# The graph is pinned per session; notifications reload each prompt.
+graph: acme/backend
+notifications:
+  recall_errors: false
