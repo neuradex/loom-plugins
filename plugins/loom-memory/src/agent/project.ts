@@ -30,6 +30,7 @@ export function resolveProject(cwd: string): Project {
 
 /** Edit the YAML document, preserving comments and unrelated settings. */
 export function writeProjectGraph(file: string, graph: string | null): void {
+	if (existsSync(file)) readProjectFile(file);
 	const source = existsSync(file) ? readFileSync(file, "utf8") : "";
 	const doc = parseDocument(source);
 	if (doc.errors.length) throw new Error("Repair .loom.yml before switching graphs.");

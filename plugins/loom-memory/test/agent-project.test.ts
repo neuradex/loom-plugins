@@ -187,3 +187,14 @@ it("exposes graph creation through the CLI API and refuses inaccessible switches
  const switched=await client.callTool({name:"switch_graph",arguments:{session_id:"tool-switch",cwd:home,graph:"acme/b"}});
  expect(switched.isError).toBeUndefined();expect(resolveProject(home).graph).toBe("acme/b");
 });
+
+it("does not move a partial transcript record across graphs or change YAML on a failed switch", async () => {
+ const home=scratch();await saveConfig({token:"fixture"},home);
+ const file=join(home,".loom.yml");writeFileSync(file,"graph: acme/a\n");
+ const transcript=join(home,"partial.jsonl");writeFileSync(transcript,'{"type":"user"');
+ const runtime=createRuntime(home);cleanup.push(()=>runtime.close());
+ const old=(await runtime.routing.select({session:"partial",cwd:home})).store;old.source("partial",transcript);
+ await expect(runtime.routing.switchGraph({session:"partial",cwd:home},"acme/b")).rejects.toThrow("Complete or repair");
+ expect(resolveProject(home).graph).toBe("acme/a");expect(old.sources()[0]?.sealed).toBe(0);
+ expect((await runtime.routing.select({session:"partial"})).store.config.graph).toBe("acme/a");
+});

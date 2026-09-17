@@ -30854,6 +30854,7 @@ function resolveProject(cwd) {
   }
 }
 function writeProjectGraph(file2, graph) {
+  if (existsSync(file2)) readProjectFile(file2);
   const source = existsSync(file2) ? readFileSync(file2, "utf8") : "";
   const doc = (0, import_yaml.parseDocument)(source);
   if (doc.errors.length) throw new Error("Repair .loom.yml before switching graphs.");
