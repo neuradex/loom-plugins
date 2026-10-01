@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFile, execFileSync } from "node:child_process";
@@ -64,6 +64,19 @@ async function fixture(options: { heartbeatMs?: number; capture?: boolean } = {}
 function value(result: Awaited<ReturnType<Client["callTool"]>>) {
 	return JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
 }
+async function expectDelivered(f: Awaited<ReturnType<typeof fixture>>) {
+	try { await expect.poll(() => f.delivered.length, { timeout: 8000 }).toBe(1); }
+	catch (error) {
+		const store = new Store(f.home, f.config);
+		try {
+			const pidFile = join(f.home, "capture.lock", "pid");
+			console.error(JSON.stringify({ workerPid: f.supervisor.workerPid,
+				captureOwner: existsSync(pidFile) ? readFileSync(pidFile, "utf8") : null,
+				lease: store.get("uploader", {}), delivery: store.get("delivery", {}), queue: store.batch().length }));
+		} finally { store.close(); }
+		throw error;
+	}
+}
 function holdCaptureLock(home: string, pid: number, config: Config) {
 	// Fix the interruption point instead of relying on the worker happening to
 	// own its upload lease when the scheduler pauses it (observed in Linux CI).
@@ -74,7 +87,13 @@ function holdCaptureLock(home: string, pid: number, config: Config) {
 	// Reproduce the observed state: a live, nonresponsive worker owns the shared
 	// capture lock. Other collectors must never steal it while it remains alive.
 	const lock = join(home, "capture.lock");
-	if (!existsSync(lock)) { mkdirSync(lock); writeFileSync(join(lock, "pid"), String(pid)); }
+	if (!existsSync(lock)) mkdirSync(lock);
+	// SIGSTOP can land between mkdir and the worker's asynchronous PID write.
+	// Publish the fixture's owner explicitly even when that directory exists;
+	// otherwise this tests an ownerless lock's grace period instead of recovery
+	// from the fully published live-owner lock observed in the incident.
+	writeFileSync(join(lock, "pid"), String(pid));
+	expect(readFileSync(join(lock, "pid"), "utf8")).toBe(String(pid));
 }
 
 it("bounds concurrent stalled requests and recovers the same host connection without losing queued experience", async () => {
@@ -91,7 +110,7 @@ it("bounds concurrent stalled requests and recovers the same host connection wit
 	expect(value(result).queue.events).toBe(1);
 	expect(f.supervisor.workerPid).not.toBe(oldPid);
 	f.allowUploads();
-	await expect.poll(() => f.delivered.length, { timeout: 8000 }).toBe(1);
+	await expectDelivered(f);
 	expect(f.delivered[0]).toMatchObject({ idempotency_key: f.key, content: f.raw });
 	await expect.poll(async () => value(await f.client.callTool({ name: "memory_status", arguments: {} })).queue.events).toBe(0);
 }, 25_000);
@@ -103,7 +122,7 @@ it("recovers an idle stalled worker and its capture lock without a host restart 
 	f.allowUploads();
 	await expect.poll(() => f.supervisor.workerPid, { timeout: 10_000 }).toSatisfy((pid: number | null) => pid !== null && pid !== oldPid);
 	expect(() => process.kill(oldPid, 0)).toThrow();
-	await expect.poll(() => f.delivered.length, { timeout: 8000 }).toBe(1);
+	await expectDelivered(f);
 	expect(f.delivered[0]).toMatchObject({ idempotency_key: f.key, content: f.raw });
 	expect((await f.client.callTool({ name: "memory_status", arguments: {} })).isError).not.toBe(true);
 }, 25_000);
