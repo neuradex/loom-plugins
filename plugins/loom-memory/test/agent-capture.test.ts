@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { mkdtempSync, writeFileSync, appendFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -117,6 +117,22 @@ describe("full experience collection", () => {
 });
 
 describe("batched delivery and overload", () => {
+	it.each(["live", "legacy", "unverifiable"])("does not reclaim an unexpired %s uploader lease", async kind => {
+		const { store, path, source } = fixture();
+		writeFileSync(path, '{"type":"user","uuid":"queued"}\n'); collect(store, source.id);
+		store.set("uploader", { owner: "other-uploader", until: Date.now() + 60_000,
+			...(kind === "legacy" ? {} : { pid: process.pid }) });
+		const permission = kind === "unverifiable" ? vi.spyOn(process, "kill").mockImplementation(() => {
+			throw Object.assign(new Error("unverifiable owner"), { code: "EPERM" });
+		}) : undefined;
+		const requests: Array<{ path: string; body: any }> = [];
+		try {
+			await drain(store, successful(requests), true);
+			expect(requests).toHaveLength(0);
+			expect(store.batch()).toHaveLength(1);
+			expect(store.get("uploader", { owner: "" }).owner).toBe("other-uploader");
+		} finally { permission?.mockRestore(); }
+	});
 	it("sends 100 source records as one request, before one segmentation signal", async () => {
 		const { store, source, path } = fixture(); const requests: any[] = [];
 		writeFileSync(path, Array.from({ length: 100 }, (_, i) => JSON.stringify({ type: "user", content: `event ${i}` })).join("\n") + "\n");

@@ -33405,6 +33405,15 @@ var CredentialUnavailableError = class extends Error {
     super("Loom authentication is unavailable; the request was not sent.");
   }
 };
+function deadUploader(pid) {
+  if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return false;
+  try {
+    process.kill(pid, 0);
+    return false;
+  } catch (error51) {
+    return error51.code === "ESRCH";
+  }
+}
 async function api(store, path, body, fetcher = fetch, timeoutMs = 1e4) {
   const credential = async (rejected) => {
     try {
@@ -33438,8 +33447,8 @@ async function drain(store, fetcher = fetch, force = false) {
   const owner = randomUUID4();
   const claimed = store.transaction(() => {
     const lease = store.get("uploader", { owner: "", until: 0 });
-    if (lease.until > Date.now()) return false;
-    store.set("uploader", { owner, until: Date.now() + 6e4 });
+    if (lease.until > Date.now() && !deadUploader(lease.pid)) return false;
+    store.set("uploader", { owner, until: Date.now() + 6e4, pid: process.pid });
     return true;
   });
   if (!claimed) return;

@@ -12,6 +12,14 @@ export class CredentialUnavailableError extends Error {
 	constructor() { super("Loom authentication is unavailable; the request was not sent."); }
 }
 
+function deadUploader(pid: unknown): boolean {
+	// Legacy leases have no PID and retain their original expiry. A live/reused
+	// PID or permission error is not evidence that it is safe to take the lease.
+	if (typeof pid !== "number" || !Number.isSafeInteger(pid) || pid <= 0) return false;
+	try { process.kill(pid, 0); return false; }
+	catch (error) { return (error as NodeJS.ErrnoException).code === "ESRCH"; }
+}
+
 export async function api<T>(store: Store, path: string, body: unknown, fetcher = fetch, timeoutMs = 10_000): Promise<T> {
 	const credential = async (rejected?: string) => {
 		try { return await accessToken(store.home, store.config, fetcher, rejected); }
@@ -41,9 +49,9 @@ export async function api<T>(store: Store, path: string, body: unknown, fetcher 
 export async function drain(store: Store, fetcher = fetch, force = false): Promise<void> {
 	const owner = randomUUID();
 	const claimed = store.transaction(() => {
-		const lease = store.get("uploader", { owner: "", until: 0 });
-		if (lease.until > Date.now()) return false;
-		store.set("uploader", { owner, until: Date.now() + 60_000 }); return true;
+		const lease = store.get<{ owner: string; until: number; pid?: number }>("uploader", { owner: "", until: 0 });
+		if (lease.until > Date.now() && !deadUploader(lease.pid)) return false;
+		store.set("uploader", { owner, until: Date.now() + 60_000, pid: process.pid }); return true;
 	});
 	if (!claimed) return;
 	try {

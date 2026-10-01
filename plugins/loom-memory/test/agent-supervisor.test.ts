@@ -9,7 +9,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import { createSupervisedServer } from "../src/agent/supervisor.js";
-import { validateConfig } from "../src/agent/config.js";
+import { validateConfig, type Config } from "../src/agent/config.js";
 import { Store } from "../src/agent/store.js";
 import { appendRecord } from "../src/agent/collector.js";
 
@@ -58,13 +58,18 @@ async function fixture(options: { heartbeatMs?: number; capture?: boolean } = {}
 	const client = new Client({ name: "persistent-host", version: "1" });
 	await client.connect(clientSide); cleanup.push(() => client.close());
 	expect((await client.listTools()).tools.map(tool => tool.name)).toContain("memory_status");
-	return { home, raw, key, supervisor, client, delivered,
+	return { home, config, raw, key, supervisor, client, delivered,
 		allowUploads() { acceptUploads = true; }, writes: () => writes };
 }
 function value(result: Awaited<ReturnType<Client["callTool"]>>) {
 	return JSON.parse((result.content as Array<{ text: string }>)[0]!.text);
 }
-function holdCaptureLock(home: string, pid: number) {
+function holdCaptureLock(home: string, pid: number, config: Config) {
+	// Fix the interruption point instead of relying on the worker happening to
+	// own its upload lease when the scheduler pauses it (observed in Linux CI).
+	const store = new Store(home, config);
+	try { store.set("uploader", { owner: "stalled-fixture", pid, until: Date.now() + 60_000 }); }
+	finally { store.close(); }
 	process.kill(pid, "SIGSTOP");
 	// Reproduce the observed state: a live, nonresponsive worker owns the shared
 	// capture lock. Other collectors must never steal it while it remains alive.
@@ -75,7 +80,7 @@ function holdCaptureLock(home: string, pid: number) {
 it("bounds concurrent stalled requests and recovers the same host connection without losing queued experience", async () => {
 	const f = await fixture({ capture: true });
 	const oldPid = f.supervisor.workerPid!;
-	holdCaptureLock(f.home, oldPid);
+	holdCaptureLock(f.home, oldPid, f.config);
 	const start = Date.now();
 	const results = await Promise.all([1, 2].map(() => f.client.callTool({ name: "memory_status", arguments: {} })));
 	expect(results.every(result => result.isError)).toBe(true);
@@ -94,7 +99,7 @@ it("bounds concurrent stalled requests and recovers the same host connection wit
 it("recovers an idle stalled worker and its capture lock without a host restart or a foreground request", async () => {
 	const f = await fixture({ heartbeatMs: 100, capture: true });
 	const oldPid = f.supervisor.workerPid!;
-	holdCaptureLock(f.home, oldPid);
+	holdCaptureLock(f.home, oldPid, f.config);
 	f.allowUploads();
 	await expect.poll(() => f.supervisor.workerPid, { timeout: 10_000 }).toSatisfy((pid: number | null) => pid !== null && pid !== oldPid);
 	expect(() => process.kill(oldPid, 0)).toThrow();
