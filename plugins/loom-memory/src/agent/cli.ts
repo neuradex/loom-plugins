@@ -4,6 +4,7 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
 import { handleHook, startFinalDrain } from "./hooks.js";
 import { connectionHook, createRuntime } from "./runtime.js";
+import { createSupervisedServer } from "./supervisor.js";
 
 process.umask(0o077);
 async function stdin(): Promise<unknown> {
@@ -21,15 +22,36 @@ async function main(): Promise<void> {
 		await saveConfig(await stdin());
 		console.log("Loom Memory configured. Full experience capture is enabled unless capture=false was supplied."); return;
 	}
-	if (!["hook", "mcp", "flush", "status"].includes(command ?? "")) {
+	if (!["hook", "mcp", "mcp-worker", "flush", "status"].includes(command ?? "")) {
 		console.log("Usage: node cli.js configure < config.json | mcp | hook | flush | status"); return;
 	}
 	if (command === "mcp") {
+		const supervisor = createSupervisedServer(fileURLToPath(import.meta.url));
+		const shutdown = () => { void supervisor.close().finally(() => process.exit(0)); };
+		// The SDK's stdio transport does not close itself on stdin EOF. Without
+		// this, the heartbeat keeps an orphaned supervisor and worker alive.
+		process.stdin.once("end", shutdown);
+		await supervisor.server.connect(new StdioServerTransport());
+		for (const signal of ["SIGTERM", "SIGINT"] as const) process.once(signal, shutdown);
+		return;
+	}
+	if (command === "mcp-worker") {
+		// Also handles abrupt supervisor death: its private stdin pipe reaches EOF.
+		process.stdin.once("end", () => process.exit(0));
 		const runtime = createRuntime();
-		const timer = setInterval(() => { void runtime.pump(); }, 1000);
+		let pumping = false;
+		const pump = async () => {
+			if (pumping) return;
+			pumping = true;
+			// A live but stalled lock owner cannot be evicted safely by other
+			// sessions. End this worker; the supervisor confirms exit before restart.
+			const watchdog = setTimeout(() => process.exit(1), 60_000);
+			try { await runtime.pump(); } finally { clearTimeout(watchdog); pumping = false; }
+		};
+		const timer = setInterval(() => { void pump(); }, 1000);
 		runtime.server.server.onclose = () => { clearInterval(timer); process.exit(0); };
 		await runtime.server.connect(new StdioServerTransport());
-		void runtime.pump(); return;
+		void pump(); return;
 	}
 	if (command === "status") {
 		const runtime = createRuntime();

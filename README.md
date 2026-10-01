@@ -12,6 +12,16 @@ This repository contains the client source, ready-to-run bundles, and both hosts
 
 The bundle is committed: installation does not require npm or a compiler.
 
+Version 0.3.1 keeps the host MCP connection in a supervisor and runs capture/tools
+in a replaceable worker. Requests have a 30-second response deadline; an independent
+status probe detects idle stalls, and a 60-second collection watchdog ends a stuck
+lock owner. Replacement waits for the old worker to exit before recovering its lock.
+Queued records and receipts stay on disk. An interrupted write is never automatically
+replayed: check whether it completed before retrying. Recovery tests pause a real
+worker while it owns the capture lock and verify that the same host connection
+recovers and delivers the retained record. Updates require reloading the installed
+plugin once; these protections cannot be retrofitted into an already-running 0.3.0 process.
+
 Install the plugin, then authenticate **Loom** in the host's MCP authentication UI. The assistant completes the local collector connection automatically. There is no API-key copy, private JSON preparation, or `configure` command in the normal flow.
 
 The remote MCP works on its own. The plugin adds a local helper for capture, prompt recall, receipts and delivery status. After login, the helper receives an encrypted, renewable credential for the same Loom account. Only the local installation can decrypt it; the assistant does not receive readable tokens. Automatic capture starts in the personal graph after verification. A revoked or expired grant triggers reconnection while retaining queued experience.
