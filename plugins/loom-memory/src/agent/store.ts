@@ -45,6 +45,8 @@ export class Store {
 			 context TEXT NOT NULL, offered TEXT NOT NULL, picked TEXT, state TEXT NOT NULL DEFAULT 'open');
 			CREATE TABLE IF NOT EXISTS project_sessions (session TEXT PRIMARY KEY, cwd TEXT NOT NULL, file TEXT, graph TEXT);
 			CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+			CREATE TABLE IF NOT EXISTS bug_report_drafts (id TEXT PRIMARY KEY, payload TEXT NOT NULL,
+			 state TEXT NOT NULL, result TEXT, expires INTEGER NOT NULL);
 		`);
 		if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) {
 			try { this.db.exec("ALTER TABLE sources ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0"); }
