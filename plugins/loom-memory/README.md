@@ -94,3 +94,31 @@ If DB/worker contention becomes the bottleneck, the next architecture is authent
 
 - [Vector buffering and backpressure](https://vector.dev/docs/architecture/buffering-model/)
 - [Vector HTTP batching and acknowledgements](https://vector.dev/docs/reference/configuration/sinks/http/)
+
+## Bug reports
+
+The local MCP provides `prepare_bug_report` and `submit_bug_report`, using the same
+`POST /bug-reports` support inbox as Loom CLI's `/bug-report`. The gateway must
+accept write-scoped MCP OAuth credentials for this endpoint before submission works.
+
+1. Prepare with a title, body, and the affected session's receipt. If recall failed,
+   pass its host `session_id` and absolute project `cwd`. Preparation is local only.
+2. Review the returned title/body, plugin and host diagnostics, and attachment summary.
+   Transcripts are off by default; `include_transcript: true` attaches only that
+   session's registered transcript, with known credentials redacted. The attachment
+   keeps complete recent JSONL records up to 1.5 MiB and reports truncation. It does
+   not crawl other sessions, infer a model, or accept arbitrary file paths.
+3. After the user approves, submit the returned `draft_id` with the **original**
+   receipt (it remains usable after the preview turn) or the same project/session
+   scope. To change any report content or attachment choice, prepare a new draft.
+
+Drafts freeze the outgoing payload in the account/graph's private local SQLite store
+and expire after 24 hours; expired rows are removed on the next preparation. Only
+submission uploads support data, which does not enter the memory ingestion queue.
+Successful repeats return the same report ID without posting again. A timeout,
+connection loss, malformed response, or server failure leaves delivery uncertain
+and blocks retries of that draft, including after a process restart. Check support
+records before creating a replacement. Explicit 400/401/403/413/429 rejections retain
+the draft for a deliberate retry after fixing the cause. Credential masking matches
+known formats and the enrolled tokens; it cannot guarantee removal of arbitrary
+secrets, so review the report and leave the transcript off when inappropriate.
