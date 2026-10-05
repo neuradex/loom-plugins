@@ -2,7 +2,7 @@ import { captureLock } from "./capture-lock.js";
 import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
-import { handleHook, startFinalDrain } from "./hooks.js";
+import { captureHook, hookLockWaitMs, recallHook, startFinalDrain } from "./hooks.js";
 import { connectionHook, createRuntime } from "./runtime.js";
 import { createSupervisedServer } from "./supervisor.js";
 
@@ -43,8 +43,9 @@ async function main(): Promise<void> {
 		const pump = async () => {
 			if (pumping) return;
 			pumping = true;
-			// A live but stalled lock owner cannot be evicted safely by other
-			// sessions. End this worker; the supervisor confirms exit before restart.
+			// A stalled lock owner blocks every session until other collectors evict
+			// it (STALE_HOLD_MS). Ending this worker sooner keeps that window short;
+			// the supervisor confirms exit before restart.
 			const watchdog = setTimeout(() => process.exit(1), 60_000);
 			try { await runtime.pump(); } finally { clearTimeout(watchdog); pumping = false; }
 		};
@@ -68,25 +69,30 @@ async function main(): Promise<void> {
 	const runtime = createRuntime();
 	try {
 		if (input) {
-			const output = await captureLock(dataHome(), async () => {
+			const event = String(input.hook_event_name ?? "");
+			// Only cursor and receipt work holds the lock, and only for a wait that
+			// ends before the host's hook timeout would.
+			const { store, project, captureError } = await captureLock(dataHome(), async () => {
 				await runtime.routing.recover();
-				const { store, project } = await runtime.routing.select({ session: typeof input.session_id === "string" ? input.session_id : undefined,
+				const selected = await runtime.routing.select({ session: typeof input.session_id === "string" ? input.session_id : undefined,
 					cwd: typeof input.cwd === "string" ? input.cwd : undefined });
-				if (input.hook_event_name === "UserPromptSubmit") {
+				if (event === "UserPromptSubmit") {
 					for (const prior of await runtime.routing.all()) prior.db.prepare("UPDATE receipts SET state='unknown' WHERE session=? AND state='open'").run(String(input.session_id ?? ""));
 				}
-				const output = await handleHook(store, input, fetch, project?.file);
+				const captureError = captureHook(selected.store, input);
 				// A switch can leave the current turn's receipt in an earlier graph.
-				if (input.hook_event_name === "Stop" && input.stop_hook_active !== true || input.hook_event_name === "Interrupt") {
+				if (event === "Stop" && input.stop_hook_active !== true || event === "Interrupt") {
 					for (const prior of await runtime.routing.all()) {
 						prior.db.prepare("UPDATE receipts SET state=CASE WHEN ? THEN 'aborted' WHEN picked IS NULL THEN 'unknown' ELSE 'ready' END WHERE session=? AND state='open'")
-							.run(input.hook_event_name === "Interrupt" ? 1 : 0, String(input.session_id ?? ""));
+							.run(event === "Interrupt" ? 1 : 0, String(input.session_id ?? ""));
 					}
 				}
-				return output;
-			});
+				return { ...selected, captureError };
+			}, { waitMs: hookLockWaitMs(event) });
+			// Recall is a network round trip; it runs after the lock is released.
+			const output = await recallHook(store, input, fetch, project?.file, captureError);
 			console.log(JSON.stringify(config.oauth?.needsReconnect ? { ...output, ...await connectionHook(input) } : output));
-			if (input.hook_event_name === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
+			if (event === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
 		} else if (command === "flush") {
 			await runtime.pump(true);
 			console.log(JSON.stringify(await runtime.status()));
