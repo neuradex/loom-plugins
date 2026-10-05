@@ -85,7 +85,8 @@ function holdCaptureLock(home: string, pid: number, config: Config) {
 	finally { store.close(); }
 	process.kill(pid, "SIGSTOP");
 	// Reproduce the observed state: a live, nonresponsive worker owns the shared
-	// capture lock. Other collectors must never steal it while it remains alive.
+	// capture lock. Other collectors leave it alone while the owner is alive and
+	// inside the stale-hold bound; recovery comes from the supervisor ending it.
 	const lock = join(home, "capture.lock");
 	if (!existsSync(lock)) mkdirSync(lock);
 	// SIGSTOP can land between mkdir and the worker's asynchronous PID write.

@@ -22,6 +22,17 @@ worker while it owns the capture lock and verify that the same host connection
 recovers and delivers the retained record. Updates require reloading the installed
 plugin once; these protections cannot be retrofitted into an already-running 0.3.0 process.
 
+Version 0.3.2 closes two ways the shared capture lock could stall every session.
+A live owner is now evicted after 120 seconds: a healthy owner only does local file
+and SQLite work, and a 0.3.1+ worker ends itself after 60 seconds, so an older lock
+belongs to a wedged process or to a pre-watchdog 0.3.0 process. One such process held
+the lock idle for 12 hours while every hook of newer sessions waited its full
+12-second budget and was then killed by the host at its own 12-second timeout. Hooks
+now wait at most 3 seconds (1 second for SessionEnd) and answer with a busy notice
+instead, and prompt recall, a network round trip, runs after the lock is released. An
+evicted owner that wakes later cannot remove its replacement's lock. Processes still
+running 0.3.0 or 0.3.1 gain none of this until the installed plugin is reloaded.
+
 Install the plugin, then authenticate **Loom** in the host's MCP authentication UI. The assistant completes the local collector connection automatically. There is no API-key copy, private JSON preparation, or `configure` command in the normal flow.
 
 The remote MCP works on its own. The plugin adds a local helper for capture, prompt recall, receipts and delivery status. After login, the helper receives an encrypted, renewable credential for the same Loom account. Only the local installation can decrypt it; the assistant does not receive readable tokens. Automatic capture starts in the personal graph after verification. A revoked or expired grant triggers reconnection while retaining queued experience.

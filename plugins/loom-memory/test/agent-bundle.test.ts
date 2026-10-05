@@ -1,6 +1,6 @@
 import { afterEach, expect, it } from "vitest";
 import { createServer } from "node:http";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { execFile, spawn } from "node:child_process";
@@ -16,10 +16,14 @@ it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch
 	const dir = mkdtempSync(join(tmpdir(), "loom-bundle-")); cleanup.push(() => rmSync(dir, { recursive: true, force: true }));
 	const received: Array<{ path: string; body: any; authorization: string | undefined }> = [];
 	let failRecall = false;
+	// Recall is a network round trip. Holding the shared capture lock across it
+	// stalls every other session's hooks and the collector for the whole request.
+	const lockHeldDuringRecall: boolean[] = [];
 	const http = createServer(async (req, res) => {
 		const chunks: Buffer[] = []; for await (const chunk of req) chunks.push(Buffer.from(chunk));
 		const body = JSON.parse(Buffer.concat(chunks).toString("utf8"));
 		received.push({ path: req.url!, body, authorization: req.headers.authorization });
+		if (req.url === "/retrieve") lockHeldDuringRecall.push(existsSync(join(home, "capture.lock")));
 		res.setHeader("content-type", "application/json");
 		if (req.url === "/retrieve" && failRecall) { res.statusCode = 503; res.end("{}"); return; }
 		if (req.url === "/retrieve") res.end(JSON.stringify({ candidate_lines: ['<knowledge id="7">Remember the prior outage</knowledge>'], candidates: [{ ref: "kn:7", label: "outage" }] }));
@@ -55,6 +59,7 @@ it("runs the shipped hook command and stdio MCP bundle against a real HTTP batch
 	const exit = await new Promise<number | null>((done) => hook.on("exit", done));
 	expect(exit, Buffer.concat(errors).toString()).toBe(0);
 	expect(JSON.parse(Buffer.concat(output).toString()).hookSpecificOutput.additionalContext).toContain("kn:7");
+	expect(lockHeldDuringRecall).toEqual([false]);
 	const mcpConfig = JSON.parse(readFileSync(resolve("plugins/loom-memory/.mcp.json"), "utf8"));
 	const args = (mcpConfig.mcpServers["loom-memory"].args as string[]).map((arg) => arg.replace("${CLAUDE_PLUGIN_ROOT}", bundle));
 	const client = new Client({ name: "bundle-fixture", version: "1" });
