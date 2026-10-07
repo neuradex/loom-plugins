@@ -46,11 +46,37 @@ production Memory API takes 2.5–3.8 seconds for a large personal graph and the
 of prompts received nothing; the hook's lock wait drops from 3 to 2 seconds so the total
 stays inside the host's 12-second hook timeout.
 
+Version 0.3.4 makes the plugin explain itself. The local MCP server's instructions now
+describe the division between the remote `loom` server and this collector, that capture is
+automatic, how recall cards and receipts work, and which tools manage graphs. When a
+session starts, the hook tells the model the session's graph and capture state and shows
+the person one line (`Loom → acme/frontend (.loom.yml) · last 24h: 3 sessions captured ·
+last upload 2 min ago · queue 0 · recall ok (1 min ago)`); `notifications.session_start:
+false` in `.loom.yml` or `settings.yaml` hides the line. Three slash commands cover what
+people used to do in Loom CLI: `/loom-memory:graph`, `/loom-memory:switch <slug>` and
+`/loom-memory:create`. No CLAUDE.md is needed for any of this; a project that should share
+a team graph commits `.loom.yml` with `graph: org/slug`.
+
 Install the plugin, then authenticate **Loom** in the host's MCP authentication UI. The assistant completes the local collector connection automatically. There is no API-key copy, private JSON preparation, or `configure` command in the normal flow.
 
 The remote MCP works on its own. The plugin adds a local helper for capture, prompt recall, receipts and delivery status. After login, the helper receives an encrypted, renewable credential for the same Loom account. Only the local installation can decrypt it; the assistant does not receive readable tokens. Automatic capture starts in the personal graph after verification. A revoked or expired grant triggers reconnection while retaining queued experience.
 
 Capture covers sessions connected to the installed hooks, including available messages and tool inputs/results. It does not crawl unrelated historical sessions. Credentials and the durable queue live under `~/.loom/agent-memory/`, outside the plugin cache. `LOOM_MEMORY_HOME` can override that location consistently for hooks and local MCP.
+
+## Graphs
+
+Every session captures to, and recalls from, one graph: your personal memory by default, or
+a team graph pinned by the nearest `.loom.yml` above the project directory (`graph: org/slug`).
+Commit that file and every teammate's plugin uses the same graph for that project.
+
+- `/loom-memory:graph` shows the current graph, what pins it, and the graphs you can use.
+- `/loom-memory:switch <slug>` (or `personal`) switches this session and writes `.loom.yml`.
+  Experience already queued and receipts from earlier turns stay with the previous graph.
+- `/loom-memory:create <organization> <slug>` creates a graph; it needs an owner role and does
+  not switch by itself.
+
+The same operations are MCP tools (`memory_status`, `list_graphs`, `switch_graph`,
+`create_graph`), so Codex users ask for them in words.
 
 ## Claude Code
 

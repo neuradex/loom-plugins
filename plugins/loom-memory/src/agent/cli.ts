@@ -3,6 +3,8 @@ import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
 import { captureHook, hookLockWaitMs, recallHook, startFinalDrain } from "./hooks.js";
+import { sessionOrientation } from "./orientation.js";
+import { readSettings } from "./settings.js";
 import { connectionHook, createRuntime } from "./runtime.js";
 import { createSupervisedServer } from "./supervisor.js";
 
@@ -90,7 +92,13 @@ async function main(): Promise<void> {
 				return { ...selected, captureError };
 			}, { waitMs: hookLockWaitMs(event) });
 			// Recall is a network round trip; it runs after the lock is released.
-			const output = await recallHook(store, input, fetch, project?.file, captureError);
+			let output = await recallHook(store, input, fetch, project?.file, captureError);
+			if (event === "SessionStart") {
+				// The model's orientation and the person's one-line status, once per session.
+				const orientation = sessionOrientation(store, project, readSettings(dataHome(), project?.file));
+				const systemMessage = [output.systemMessage, orientation.systemMessage].filter(Boolean).join("\n");
+				output = { ...output, ...(systemMessage ? { systemMessage } : {}), hookSpecificOutput: { hookEventName: event, additionalContext: orientation.additionalContext } };
+			}
 			console.log(JSON.stringify(config.oauth?.needsReconnect ? { ...output, ...await connectionHook(input) } : output));
 			if (event === "SessionEnd") startFinalDrain(fileURLToPath(import.meta.url));
 		} else if (command === "flush") {
