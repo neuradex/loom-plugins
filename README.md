@@ -33,6 +33,19 @@ instead, and prompt recall, a network round trip, runs after the lock is release
 evicted owner that wakes later cannot remove its replacement's lock. Processes still
 running 0.3.0 or 0.3.1 gain none of this until the installed plugin is reloaded.
 
+Version 0.3.3 changes what the prompt hook injects. The server's candidate lines are
+full renders: a topic carries its tag list and embedded messages, and an episode carries
+the whole captured transcript record as JSON (1.7–17 KB each in production). Under the
+hook's block budget only three or four of the 16–17 ranked lines fit, and on a ten-question
+probe the answer was the eleventh line as often as the first. The hook now renders every
+candidate as a one-line card (ref, kind, date, title and a 300-character snippet of the
+spoken text; machine records such as hook observations and tool results are left out) so
+all ranked candidates fit in 8,000 characters, and the model reads the full text of the
+ones it needs with memory_read. The recall deadline rises from 4 to 6 seconds, because the
+production Memory API takes 2.5–3.8 seconds for a large personal graph and the slower third
+of prompts received nothing; the hook's lock wait drops from 3 to 2 seconds so the total
+stays inside the host's 12-second hook timeout.
+
 Install the plugin, then authenticate **Loom** in the host's MCP authentication UI. The assistant completes the local collector connection automatically. There is no API-key copy, private JSON preparation, or `configure` command in the normal flow.
 
 The remote MCP works on its own. The plugin adds a local helper for capture, prompt recall, receipts and delivery status. After login, the helper receives an encrypted, renewable credential for the same Loom account. Only the local installation can decrypt it; the assistant does not receive readable tokens. Automatic capture starts in the personal graph after verification. A revoked or expired grant triggers reconnection while retaining queued experience.
