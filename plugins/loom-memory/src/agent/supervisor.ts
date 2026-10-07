@@ -26,7 +26,7 @@ interface Options {
 export function createSupervisedServer(workerPath: string, options: Options = {}) {
 	const timeout = options.requestTimeoutMs ?? 30_000;
 	const healthTimeout = options.healthTimeoutMs ?? 15_000;
-	const server = new Server({ name: "loom-memory", version: "0.3.2" }, {
+	const server = new Server({ name: "loom-memory", version: "0.3.3" }, {
 		capabilities: { tools: {} }, instructions: USAGE_GUIDANCE,
 	});
 	let worker: Worker | undefined;
@@ -71,7 +71,7 @@ export function createSupervisedServer(workerPath: string, options: Options = {}
 			// relay raw exceptions, credentials or repeated recovery notices to users.
 			transport.stderr?.on("data", () => {});
 			let finish!: () => void;
-			const current: Worker = { client: new Client({ name: "loom-supervisor", version: "0.3.2" }),
+			const current: Worker = { client: new Client({ name: "loom-supervisor", version: "0.3.3" }),
 				transport, exited: new Promise<void>(resolve => { finish = resolve; }), ended: false };
 			transport.onclose = () => {
 				current.ended = true; finish();
