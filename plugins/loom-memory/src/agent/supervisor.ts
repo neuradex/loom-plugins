@@ -2,7 +2,7 @@ import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { CallToolRequestSchema, ListToolsRequestSchema, McpError, ErrorCode } from "@modelcontextprotocol/sdk/types.js";
-import { USAGE_GUIDANCE } from "./hooks.js";
+import { SERVER_INSTRUCTIONS } from "./hooks.js";
 
 const RECOVERY_MESSAGE = "The Loom worker stopped responding. Its connection is being recovered; saved experience is retained. This operation was not replayed. Before retrying a write, check whether it completed.";
 
@@ -26,8 +26,8 @@ interface Options {
 export function createSupervisedServer(workerPath: string, options: Options = {}) {
 	const timeout = options.requestTimeoutMs ?? 30_000;
 	const healthTimeout = options.healthTimeoutMs ?? 15_000;
-	const server = new Server({ name: "loom-memory", version: "0.3.3" }, {
-		capabilities: { tools: {} }, instructions: USAGE_GUIDANCE,
+	const server = new Server({ name: "loom-memory", version: "0.3.4" }, {
+		capabilities: { tools: {} }, instructions: SERVER_INSTRUCTIONS,
 	});
 	let worker: Worker | undefined;
 	let starting: Promise<Worker> | undefined;
@@ -71,7 +71,7 @@ export function createSupervisedServer(workerPath: string, options: Options = {}
 			// relay raw exceptions, credentials or repeated recovery notices to users.
 			transport.stderr?.on("data", () => {});
 			let finish!: () => void;
-			const current: Worker = { client: new Client({ name: "loom-supervisor", version: "0.3.3" }),
+			const current: Worker = { client: new Client({ name: "loom-supervisor", version: "0.3.4" }),
 				transport, exited: new Promise<void>(resolve => { finish = resolve; }), ended: false };
 			transport.onclose = () => {
 				current.ended = true; finish();

@@ -4,15 +4,20 @@ import { parse } from "yaml";
 import { z } from "zod";
 import { readProjectFile } from "./project.js";
 
+const notifications = z.object({
+	recall_errors: z.boolean().default(false),
+	/** The one-line Loom status shown to the person when a session starts. */
+	session_start: z.boolean().default(true),
+}).strict();
 const schema = z.object({
-	notifications: z.object({ recall_errors: z.boolean().default(false) }).strict().default({ recall_errors: false }),
+	notifications: notifications.default({ recall_errors: false, session_start: true }),
 }).strict();
 
 /** Project preferences share .loom.yml with Loom CLI. The old 0.2.2
  * installation file is only a compatibility fallback when no project file exists.
  * A broken preference file must not stop capture or create recurring warnings. */
 export function readSettings(home: string, projectFile?: string | null) {
-	const defaults = { notifications: { recall_errors: false } };
+	const defaults = { notifications: { recall_errors: false, session_start: true } };
 	if (projectFile) {
 		try {
 			const doc = readProjectFile(projectFile);

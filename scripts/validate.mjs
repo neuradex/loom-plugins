@@ -23,4 +23,7 @@ assert.equal(codex.mcpServers['loom-memory'].cwd, '.');
 assert.deepEqual(codex.mcpServers['loom-memory'].args, ['dist/cli.js', 'mcp']);
 assert.equal((await json(`${base}/hooks/hooks.json`)).hooks.SessionEnd[0].hooks[0].timeout, 3);
 for (const file of ['dist/cli.js','THIRD_PARTY_NOTICES.txt','skills/loom-memory/SKILL.md']) assert((await stat(`${base}/${file}`)).size > 0);
+for (const file of ['graph.md', 'switch.md', 'create.md']) {
+  assert.match(await readFile(`${base}/commands/${file}`, 'utf8'), /^---\ndescription: .+\n/, `commands/${file} needs a description`);
+}
 console.log('Both marketplace catalogs, package manifests and shipped runtime validated.');
