@@ -31,3 +31,15 @@ Pass the current turn's receipt to local `memory_search`, `memory_read`, `rememb
 Recall failures are quiet by default. Inspect `memory_status` for sanitized diagnostics. Set `notifications.recall_errors: true` in `.loom.yml` to show warnings. A silent failed recall still leaves usage unknown and never invents negative feedback.
 
 For user-requested graph management, use `list_graphs` / `list_graph_organizations` to establish the target, then `create_graph` or `switch_graph`. Creation uses the existing CLI API and requires organization ownership. Switching updates `.loom.yml` and only this host session: supply the current receipt (or host session_id plus absolute cwd if recall failed). Empty graph means personal. Existing receipts still refer to the old graph; continue reporting their actual use. A timeout after creation is ambiguous: list graphs before retrying. The server has no account-wide active graph.
+
+When the user asks to report a Loom bug, call `prepare_bug_report` with a clear title,
+observed behavior, expected behavior and reproduction steps when known. Use the
+affected session's receipt; if unavailable, pass its host session_id and absolute
+cwd. Diagnostics are collected locally. Transcript attachment is optional and off
+by default; only enable it when the user wants to share that session with support.
+Show the returned report preview and attachment summary before calling
+`submit_bug_report` with the frozen draft_id after approval. If that approval is
+already explicit for the reviewed draft, proceed without asking again. Keep the
+original receipt across the confirmation turn so the draft's graph stays selected.
+Never claim success without a returned report ID, and do not blindly retry uncertain
+delivery. Reports go to Loom support, not into the memory graph.

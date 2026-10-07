@@ -12,7 +12,9 @@ This repository contains the client source, ready-to-run bundles, and both hosts
 
 The bundle is committed: installation does not require npm or a compiler.
 
-Version 0.3.1 keeps the host MCP connection in a supervisor and runs capture/tools
+Version 0.4.0 adds local MCP bug-report previews and submission to the Loom support inbox.
+
+The plugin keeps the host MCP connection in a supervisor and runs capture/tools
 in a replaceable worker. Requests have a 30-second response deadline; an independent
 status probe detects idle stalls, and a 60-second collection watchdog ends a stuck
 lock owner. Replacement waits for the old worker to exit before recovering its lock.

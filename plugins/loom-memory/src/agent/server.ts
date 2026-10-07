@@ -7,6 +7,7 @@ import type { Scope } from "./routing.js";
 import { accessToken } from "./auth.js";
 import { SERVER_INSTRUCTIONS } from "./hooks.js";
 import { createMemoryClient } from "../memory.js";
+import { registerBugReportTools } from "./bug-report.js";
 
 const ref = z.string().regex(/^(kn|tp|ep):\d+$/);
 const receiptArg = z.string().uuid().optional().describe("Receipt from the current Loom hook context. Omit only when hooks are unavailable.");
@@ -29,8 +30,9 @@ function expose(store: Store, id: string | undefined, refs: string[]): void {
 }
 
 export function createAgentServer(source: Store | ((scope?: Scope) => Promise<Store>), fetcher = fetch, status?: (scope?: Scope) => Promise<unknown>): McpServer {
-	const server = new McpServer({ name: "loom-memory", version: "0.3.4" }, { instructions: SERVER_INSTRUCTIONS });
+	const server = new McpServer({ name: "loom-memory", version: "0.4.0" }, { instructions: SERVER_INSTRUCTIONS });
 	const getStore = async (scope: Scope) => typeof source === "function" ? source(scope) : source;
+	registerBugReportTools(server, getStore, fetcher);
 	const memoryFor = (store: Store) => createMemoryClient(store.config.url, { fetch: fetcher });
 	const authFor = async (store: Store) => ({ token: await accessToken(store.home, store.config, fetcher), graph: store.config.graph });
 	const json = (value: unknown) => ({ content: [{ type: "text" as const, text: JSON.stringify(value) }] });
