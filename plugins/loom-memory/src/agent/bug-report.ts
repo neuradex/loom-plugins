@@ -7,7 +7,7 @@ import { accessToken } from "./auth.js";
 import type { Scope } from "./routing.js";
 import type { Store } from "./store.js";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const MAX_TRANSCRIPT_BYTES = 1536 * 1024;
 const DRAFT_TTL_MS = 24 * 60 * 60 * 1000;
 const scopeArgs = {

@@ -3,8 +3,32 @@ import { collectAll } from "./collector.js";
 import { Store } from "./store.js";
 import { captureLock } from "./capture-lock.js";
 import { accessToken } from "./auth.js";
+import { groundingKey } from "./board.js";
 
 interface DeliveryState { retryAt: number; failures: number; lastSuccess: number; error?: string }
+
+/** The latest acknowledged user message of each host session, by capture time.
+ * Board landings cite it as grounded_by when it precedes the question; an older
+ * turn's message is never substituted. */
+function rememberGrounding(store: Store, rows: Array<{ id: string; body: string }>, acknowledged: Map<string, number | undefined>): void {
+	const latest = new Map<string, { id: number; at: number }>();
+	for (const row of rows) {
+		const id = acknowledged.get(row.id);
+		if (typeof id !== "number") continue;
+		let episode: { actor_type?: string; type?: string; created_at?: string; metadata?: { source_session_id?: unknown; part?: unknown } };
+		try { episode = JSON.parse(row.body); } catch { continue; }
+		if (episode.actor_type !== "user" || episode.type !== "message" || episode.metadata?.part !== 1) continue;
+		const session = episode.metadata?.source_session_id;
+		const at = typeof episode.created_at === "string" ? Date.parse(episode.created_at) : NaN;
+		if (typeof session !== "string" || !Number.isFinite(at)) continue;
+		const current = latest.get(session);
+		if (!current || current.at < at) latest.set(session, { id, at });
+	}
+	for (const [session, candidate] of latest) {
+		const key = groundingKey(session);
+		if ((store.get<{ at: number } | null>(key, null)?.at ?? -1) < candidate.at) store.set(key, candidate);
+	}
+}
 export class DeliveryError extends Error {
 	constructor(readonly status: number, readonly retryAfterMs = 0) { super(`Memory API HTTP ${status}`); }
 }
@@ -64,10 +88,11 @@ export async function drain(store: Store, fetcher = fetch, force = false): Promi
 			const bytes = rows.reduce((sum, row) => sum + row.bytes, 0);
 			const full = rows.length >= store.config.batchEvents || bytes >= store.config.batchBytes / 2;
 			if (!force && !full && Date.now() - state.lastSuccess < store.config.flushMs) return;
-			const response = await api<{ results: Array<{ idempotency_key: string }> }>(store, "/ingest/episodes/batch", { episodes: rows.map((row) => JSON.parse(row.body)) }, fetcher);
-			const confirmed = new Set(response.results?.map((item) => item.idempotency_key));
+			const response = await api<{ results: Array<{ idempotency_key: string; episode_id?: number }> }>(store, "/ingest/episodes/batch", { episodes: rows.map((row) => JSON.parse(row.body)) }, fetcher);
+			const confirmed = new Map(response.results?.map((item) => [item.idempotency_key, item.episode_id]));
 			if (rows.some((row) => !confirmed.has(row.id))) throw new Error("Incomplete batch acknowledgement");
 			store.ack(rows);
+			rememberGrounding(store, rows, confirmed);
 			const metrics = store.get("metrics", { batches: 0, events: 0, bytes: 0 });
 			store.set("metrics", { batches: metrics.batches + 1, events: metrics.events + rows.length, bytes: metrics.bytes + bytes });
 		}
