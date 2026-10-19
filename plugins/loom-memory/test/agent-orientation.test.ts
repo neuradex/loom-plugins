@@ -29,8 +29,9 @@ describe("what the model is told automatically", () => {
 	});
 	it("ships slash commands for the graph tasks people used to do in Loom CLI", () => {
 		const dir = resolve("plugins/loom-memory/commands");
-		expect(readdirSync(dir).sort()).toEqual(["create.md", "graph.md", "switch.md"]);
+		expect(readdirSync(dir).sort()).toEqual(["board.md", "create.md", "graph.md", "switch.md"]);
 		for (const [file, needles] of [
+			["board.md", ["inquiry_list", "landing_error"]],
 			["graph.md", ["memory_status", "list_graphs", "/loom-memory:switch"]],
 			["switch.md", ["$ARGUMENTS", "list_graphs", "switch_graph", ".loom.yml", "personal"]],
 			["create.md", ["$ARGUMENTS", "list_graph_organizations", "create_graph", "switch"]],

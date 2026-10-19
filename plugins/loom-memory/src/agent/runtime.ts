@@ -8,6 +8,7 @@ import { Routing, type Scope } from "./routing.js";
 import { readSettings } from "./settings.js";
 import { createAgentServer, deliverUsage } from "./server.js";
 import { drain } from "./delivery.js";
+import { deliverBoard } from "./board.js";
 
 /** Keep stdio available before authentication and adopt enrollment without restarting. */
 export function createRuntime(home = dataHome(), fetcher = fetch) {
@@ -52,7 +53,7 @@ export function createRuntime(home = dataHome(), fetcher = fetch) {
 		async pump(force = false) {
 			if (busy) return;
 			busy = true;
-			try { await captureLock(home, () => routing.recover()); for (const current of await routing.all()) { await drain(current, fetcher, force); await deliverUsage(current, fetcher); } }
+			try { await captureLock(home, () => routing.recover()); for (const current of await routing.all()) { await drain(current, fetcher, force); await deliverBoard(current, fetcher); await deliverUsage(current, fetcher); } }
 			catch (error) { if (!(error instanceof NotConnectedError)) console.error("Loom collector is waiting for recovery; queued experience is retained."); }
 			finally { busy = false; }
 		},

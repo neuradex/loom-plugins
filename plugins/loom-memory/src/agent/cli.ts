@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { dataHome, NotConnectedError, readConfig, saveConfig } from "./config.js";
 import { captureHook, hookLockWaitMs, recallHook, startFinalDrain } from "./hooks.js";
+import { boardHook } from "./board.js";
 import { sessionOrientation } from "./orientation.js";
 import { readSettings } from "./settings.js";
 import { connectionHook, createRuntime } from "./runtime.js";
@@ -74,7 +75,7 @@ async function main(): Promise<void> {
 			const event = String(input.hook_event_name ?? "");
 			// Only cursor and receipt work holds the lock, and only for a wait that
 			// ends before the host's hook timeout would.
-			const { store, project, captureError } = await captureLock(dataHome(), async () => {
+			const { store, project, captureError, board } = await captureLock(dataHome(), async () => {
 				await runtime.routing.recover();
 				const selected = await runtime.routing.select({ session: typeof input.session_id === "string" ? input.session_id : undefined,
 					cwd: typeof input.cwd === "string" ? input.cwd : undefined });
@@ -89,10 +90,12 @@ async function main(): Promise<void> {
 							.run(event === "Interrupt" ? 1 : 0, String(input.session_id ?? ""));
 					}
 				}
-				return { ...selected, captureError };
+				// The board reads and writes SQLite only; it shares the lock with capture.
+				const board = boardHook(selected.store, input);
+				return { ...selected, captureError, board };
 			}, { waitMs: hookLockWaitMs(event) });
 			// Recall is a network round trip; it runs after the lock is released.
-			let output = await recallHook(store, input, fetch, project?.file, captureError);
+			let output = await recallHook(store, input, fetch, project?.file, captureError, board);
 			if (event === "SessionStart") {
 				// The model's orientation and the person's one-line status, once per session.
 				const orientation = sessionOrientation(store, project, readSettings(dataHome(), project?.file));

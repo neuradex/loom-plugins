@@ -84,6 +84,14 @@ The prompt hook gives the model a receipt and up to roughly 6,000 characters of 
 
 Hooks append context; they cannot freely remove earlier host messages or reproduce native reasoning-stream injection. The plugin does not claim Loom CLI's exact folding or hidden reasoning visibility.
 
+## Working board: inquiries that become knowledge
+
+Loom CLI's board is ported as three local tools and two hook positions. The model calls `inquiry_open` when an answer will take a hunt (a grep, several files, a call path) and `inquiry_close` the moment it knows; `inquiry_list` (also `/loom-memory:board`) shows the session's board. Every row lands on the existing `/ingest/inquiries` endpoint: an open question lands unindexed so the graph can show it as unresolved, and a close updates the same row, which is when the server indexes and tags it like any other knowledge. Later sessions receive it through the ordinary recall cards; the plugin accumulates nothing itself.
+
+Grounding is recorded by the plugin, not dictated by the model: the `PreToolUse` hook logs the repo-relative path of every file the host reads or edits, the question is anchored to the file open when it was asked, and a close is grounded on the files touched since it was opened (or the most recent ones for a question registered after the hunt). An explicit `grounded` argument narrows that list. Landings also cite the turn's captured user message as `grounded_by` once the server has acknowledged it; a landing waits at most sixty seconds for that acknowledgement and never substitutes an older turn's message.
+
+What differs from Loom CLI is the injection rhythm. Loom CLI appends the board to every LLM call; a Claude Code hook can only append once per prompt, so the board follows the recall cards under `<loom.system.board>` within a 1,200-character budget, and a one-line opening nudge appears once the session has touched a file and nothing is open. When a turn ends with a question that was hunted after it was opened and is still open, the `Stop` hook asks once (per question) for the close as a forced follow-up turn; a question kept open on purpose survives the session.
+
 ## Scaling beyond the first version
 
 Batching reduces request overhead, not the number of stored bytes, index updates or extraction work. Measure three separate bottlenecks: ingress requests/bytes and latency, database/outbox pressure, and downstream worker lag/cost. The local counters are the first part; server metrics remain necessary for capacity decisions.

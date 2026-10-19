@@ -53,6 +53,18 @@ export class Store {
 			catch (error) { if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) throw error; }
 		}
 		this.db.exec("CREATE TABLE IF NOT EXISTS project_graphs (graph TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS graph_switches (session TEXT PRIMARY KEY, value TEXT NOT NULL)");
+		// The working board: questions the model opens while hunting for an answer,
+		// the files it touched meanwhile (automatic grounding), and a mirror of the
+		// host's task list. Rows are keyed by host session; ids restart per session.
+		this.db.exec(`
+			CREATE TABLE IF NOT EXISTS inquiries (session TEXT NOT NULL, id TEXT NOT NULL, title TEXT NOT NULL, why TEXT,
+			 state TEXT NOT NULL DEFAULT 'open', answer TEXT, grounded TEXT NOT NULL DEFAULT '[]', anchors TEXT NOT NULL DEFAULT '[]',
+			 ref INTEGER, opened_at INTEGER NOT NULL, closed_at INTEGER, opened_seq INTEGER NOT NULL DEFAULT 0,
+			 landed TEXT NOT NULL DEFAULT '', landing_error TEXT, nudged INTEGER NOT NULL DEFAULT 0, PRIMARY KEY (session, id));
+			CREATE TABLE IF NOT EXISTS touches (seq INTEGER PRIMARY KEY AUTOINCREMENT, session TEXT NOT NULL, file TEXT NOT NULL,
+			 at INTEGER NOT NULL DEFAULT (unixepoch()*1000));
+			CREATE TABLE IF NOT EXISTS board_todos (session TEXT PRIMARY KEY, todos TEXT NOT NULL);
+		`);
 
 	}
 	close(): void { this.db.close(); }
