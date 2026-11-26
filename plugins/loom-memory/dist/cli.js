@@ -31336,11 +31336,11 @@ import { randomUUID as randomUUID6 } from "node:crypto";
 import { existsSync as existsSync2 } from "node:fs";
 
 // plugins/loom-memory/src/agent/collector.ts
-import { openSync, closeSync, fstatSync, readSync } from "node:fs";
+import { openSync as openSync2, closeSync as closeSync2, fstatSync, readSync as readSync2 } from "node:fs";
 
 // plugins/loom-memory/src/agent/store.ts
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync, statSync as statSync3 } from "node:fs";
+import { mkdirSync, chmodSync, statSync as statSync3, openSync, closeSync, readSync } from "node:fs";
 import { join as join5 } from "node:path";
 import { randomUUID as randomUUID4 } from "node:crypto";
 
@@ -31434,9 +31434,28 @@ function readSettings(home, projectFile) {
 function fileStat(path) {
   try {
     const stat3 = statSync3(path, { bigint: true });
-    return { identity: `${stat3.dev}:${stat3.ino}`, size: Number(stat3.size) };
+    return { identity: `${stat3.dev}:${stat3.ino}`, recorded: `${Number(stat3.dev)}:${Number(stat3.ino)}`, size: Number(stat3.size) };
   } catch {
     return void 0;
+  }
+}
+function tailHash(fd, position) {
+  const tail = Buffer.alloc(Math.min(64, position));
+  readSync(fd, tail, 0, tail.length, position - tail.length);
+  return digest(tail.toString("base64"));
+}
+function cursorHolds(source, file2) {
+  if (source.identity !== file2.recorded || source.offset > file2.size) return false;
+  if (!source.offset || !source.tail_hash) return true;
+  try {
+    const fd = openSync(source.path, "r");
+    try {
+      return tailHash(fd, source.offset) === source.tail_hash;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return false;
   }
 }
 var Store = class {
@@ -31529,11 +31548,11 @@ var Store = class {
    * follows the file to `path`, so the stored path always names the file its
    * cursor describes. */
   alias(session, id, path) {
-    const target = fileStat(path)?.identity;
+    const target = fileStat(path);
     if (!target) return void 0;
     for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC").all(session, id)) {
-      if (fileStat(source.path)?.identity === target) return source;
-      if (source.identity !== target) continue;
+      if (fileStat(source.path)?.identity === target.identity) return source;
+      if (target.recorded !== target.identity || source.identity !== target.recorded) continue;
       this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
       return { ...source, path };
     }
@@ -31558,10 +31577,10 @@ var Store = class {
         const groups = /* @__PURE__ */ new Map();
         for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND sealed=0 AND path<>''").all(session)) {
           const file2 = fileStat(source.path);
-          if (file2) groups.set(file2.identity, { size: file2.size, sources: [...groups.get(file2.identity)?.sources ?? [], source] });
+          if (file2) groups.set(file2.identity, { file: file2, sources: [...groups.get(file2.identity)?.sources ?? [], source] });
         }
-        for (const [identity, { size, sources: group }] of groups) {
-          const rank = (source) => [source.identity === identity && source.offset <= size ? 1 : 0, source.offset];
+        for (const { file: file2, sources: group } of groups.values()) {
+          const rank = (source) => [cursorHolds(source, file2) ? 1 : 0, source.offset];
           const keep = group.reduce((best, source) => {
             const [valid, offset] = rank(source);
             const [bestValid, bestOffset] = rank(best);
@@ -31764,18 +31783,14 @@ function collect(store, sourceId) {
     store.transaction(() => {
       const source = store.db.prepare("SELECT * FROM sources WHERE id=?").get(sourceId);
       if (!source.path || source.sealed) return;
-      const fd = openSync(source.path, "r");
+      const fd = openSync2(source.path, "r");
       try {
         const stat3 = fstatSync(fd);
         if (!stat3.isFile()) throw new Error("Transcript path is not a regular file.");
         const identity = `${stat3.dev}:${stat3.ino}`;
         let offset = identity !== source.identity || stat3.size < source.offset ? 0 : source.offset;
-        const tailHash = (position) => {
-          const tail = Buffer.alloc(Math.min(64, position));
-          readSync(fd, tail, 0, tail.length, position - tail.length);
-          return digest(tail.toString("base64"));
-        };
-        if (offset && source.tail_hash && tailHash(offset) !== source.tail_hash) offset = 0;
+        const tail = (position) => tailHash(fd, position);
+        if (offset && source.tail_hash && tail(offset) !== source.tail_hash) offset = 0;
         if (stat3.size === offset) {
           store.db.prepare("UPDATE sources SET error=NULL WHERE id=?").run(source.id);
           return;
@@ -31785,7 +31800,7 @@ function collect(store, sourceId) {
         let end;
         do {
           buffer = Buffer.alloc(bytes);
-          const read = readSync(fd, buffer, 0, bytes, offset);
+          const read = readSync2(fd, buffer, 0, bytes, offset);
           buffer = buffer.subarray(0, read);
           end = buffer.lastIndexOf(10);
           if (end >= 0 || bytes >= stat3.size - offset || bytes >= MAX_RECORD_BYTES) break;
@@ -31809,9 +31824,9 @@ function collect(store, sourceId) {
           start = newline + 1;
         }
         offset += start;
-        store.db.prepare("UPDATE sources SET offset=?,identity=?,tail_hash=?,error=? WHERE id=?").run(offset, identity, tailHash(offset), offset < stat3.size ? "Catching up with transcript." : null, source.id);
+        store.db.prepare("UPDATE sources SET offset=?,identity=?,tail_hash=?,error=? WHERE id=?").run(offset, identity, tail(offset), offset < stat3.size ? "Catching up with transcript." : null, source.id);
       } finally {
-        closeSync(fd);
+        closeSync2(fd);
       }
     });
   } catch (error51) {

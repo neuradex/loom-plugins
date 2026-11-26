@@ -1,6 +1,6 @@
 import { openSync, closeSync, fstatSync, readSync } from "node:fs";
 import { digest } from "./config.js";
-import { Store, type Episode, type Source } from "./store.js";
+import { Store, tailHash, type Episode, type Source } from "./store.js";
 
 const READ_BYTES = 1_048_576;
 const MAX_RECORD_BYTES = 16_777_216;
@@ -122,14 +122,10 @@ export function collect(store: Store, sourceId: string): number {
 				if (!stat.isFile()) throw new Error("Transcript path is not a regular file.");
 				const identity = `${stat.dev}:${stat.ino}`;
 				let offset = identity !== source.identity || stat.size < source.offset ? 0 : source.offset;
-				const tailHash = (position: number): string => {
-					const tail = Buffer.alloc(Math.min(64, position));
-					readSync(fd, tail, 0, tail.length, position - tail.length);
-					return digest(tail.toString("base64"));
-				};
+				const tail = (position: number): string => tailHash(fd, position);
 				// A file can be truncated and regrow between polls without changing its
 				// inode. Check the old cursor's tail before trusting that byte offset.
-				if (offset && source.tail_hash && tailHash(offset) !== source.tail_hash) offset = 0;
+				if (offset && source.tail_hash && tail(offset) !== source.tail_hash) offset = 0;
 				if (stat.size === offset) {
 					store.db.prepare("UPDATE sources SET error=NULL WHERE id=?").run(source.id);
 					return;
@@ -159,7 +155,7 @@ export function collect(store: Store, sourceId: string): number {
 				}
 				offset += start;
 				store.db.prepare("UPDATE sources SET offset=?,identity=?,tail_hash=?,error=? WHERE id=?")
-					.run(offset, identity, tailHash(offset), offset < stat.size ? "Catching up with transcript." : null, source.id);
+					.run(offset, identity, tail(offset), offset < stat.size ? "Catching up with transcript." : null, source.id);
 			} finally { closeSync(fd); }
 		});
 	} catch (error) {

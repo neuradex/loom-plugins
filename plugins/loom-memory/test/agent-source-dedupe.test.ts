@@ -154,6 +154,21 @@ describe("collapsing duplicate sources from earlier versions", () => {
 		appendFileSync(a, line(2)); collectAll(store);
 		expect(contents(store)).toEqual(["u2"]);
 	});
+	it("does not keep a cursor read before the file was truncated and regrown in place", () => {
+		const { store, a, b } = profiles();
+		writeFileSync(a, line(1) + line(2) + line(3));
+		const old = legacySource(store, "bot", a); collect(store, old);
+		writeFileSync(a, line(7));
+		const current = legacySource(store, "bot", b); collect(store, current);
+		appendFileSync(a, line(8) + line(9) + line(10));
+		store.ack(store.batch());
+		const offsets = Object.fromEntries(store.sources().map((source) => [source.id, source.offset]));
+		expect(offsets[old]).toBeGreaterThan(offsets[current]!);
+		store.collapseDuplicateSources();
+		expect(store.sources().find((source) => !source.sealed)?.id).toBe(current);
+		collectAll(store);
+		expect(contents(store)).toEqual(["u8", "u9", "u10"]);
+	});
 	it("runs before polling on every drain, so a pre-0.4.1 pair stops uploading twice", async () => {
 		const { store, a, b } = profiles();
 		writeFileSync(a, line(1));

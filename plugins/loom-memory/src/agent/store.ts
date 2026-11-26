@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync, statSync } from "node:fs";
+import { mkdirSync, chmodSync, statSync, openSync, closeSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { accountKey, digest, type Config } from "./config.js";
@@ -21,11 +21,36 @@ export interface Source {
 }
 export interface QueueRow { id: string; body: string; bytes: number; segment: string }
 
-/** `dev:ino` as collect() records it. BigInt stats keep NTFS file ids above 2^53
- * distinct; below that the string is the same as the one collect() stores. */
-function fileStat(path: string): { identity: string; size: number } | undefined {
-	try { const stat = statSync(path, { bigint: true }); return { identity: `${stat.dev}:${stat.ino}`, size: Number(stat.size) }; }
-	catch { return undefined; }
+interface FileStat {
+	/** Exact `dev:ino`, from BigInt stats so NTFS ids above 2^53 stay distinct. */
+	identity: string;
+	/** The form collect() stores in sources.identity (numeric stats). It equals
+	 * `identity` below 2^53; above that it is rounded and can name another file. */
+	recorded: string;
+	size: number;
+}
+function fileStat(path: string): FileStat | undefined {
+	try {
+		const stat = statSync(path, { bigint: true });
+		return { identity: `${stat.dev}:${stat.ino}`, recorded: `${Number(stat.dev)}:${Number(stat.ino)}`, size: Number(stat.size) };
+	} catch { return undefined; }
+}
+/** Digest of the bytes before a cursor, which collect() records to detect a file
+ * truncated and regrown in place. */
+export function tailHash(fd: number, position: number): string {
+	const tail = Buffer.alloc(Math.min(64, position));
+	readSync(fd, tail, 0, tail.length, position - tail.length);
+	return digest(tail.toString("base64"));
+}
+/** Whether collect() would continue this source's cursor on the file as it is now
+ * rather than restart it at byte 0. */
+function cursorHolds(source: Source, file: FileStat): boolean {
+	if (source.identity !== file.recorded || source.offset > file.size) return false;
+	if (!source.offset || !source.tail_hash) return true;
+	try {
+		const fd = openSync(source.path, "r");
+		try { return tailHash(fd, source.offset) === source.tail_hash; } finally { closeSync(fd); }
+	} catch { return false; }
 }
 
 /** SQLite transactions bind the source cursor to its durable outbox. A crash can
@@ -108,12 +133,13 @@ export class Store {
 	 * follows the file to `path`, so the stored path always names the file its
 	 * cursor describes. */
 	private alias(session: string, id: string, path: string): Source | undefined {
-		const target = fileStat(path)?.identity;
+		const target = fileStat(path);
 		if (!target) return undefined;
 		for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC")
 			.all(session, id) as unknown as Source[]) {
-			if (fileStat(source.path)?.identity === target) return source;
-			if (source.identity !== target) continue;
+			if (fileStat(source.path)?.identity === target.identity) return source;
+			// A rounded recorded identity cannot tell this file from its neighbours.
+			if (target.recorded !== target.identity || source.identity !== target.recorded) continue;
 			this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
 			return { ...source, path };
 		}
@@ -136,14 +162,14 @@ export class Store {
 				.all() as Array<{ session: string }>;
 			let sealed = 0;
 			for (const { session } of sessions) {
-				const groups = new Map<string, { size: number; sources: Source[] }>();
+				const groups = new Map<string, { file: FileStat; sources: Source[] }>();
 				for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND sealed=0 AND path<>''").all(session) as unknown as Source[]) {
 					const file = fileStat(source.path);
-					if (file) groups.set(file.identity, { size: file.size, sources: [...groups.get(file.identity)?.sources ?? [], source] });
+					if (file) groups.set(file.identity, { file, sources: [...groups.get(file.identity)?.sources ?? [], source] });
 				}
-				for (const [identity, { size, sources: group }] of groups) {
+				for (const { file, sources: group } of groups.values()) {
 					// A cursor recorded for another generation of the file restarts at byte 0.
-					const rank = (source: Source) => [source.identity === identity && source.offset <= size ? 1 : 0, source.offset] as const;
+					const rank = (source: Source) => [cursorHolds(source, file) ? 1 : 0, source.offset] as const;
 					const keep = group.reduce((best, source) => {
 						const [valid, offset] = rank(source); const [bestValid, bestOffset] = rank(best);
 						return valid > bestValid || (valid === bestValid && offset > bestOffset) ? source : best;
