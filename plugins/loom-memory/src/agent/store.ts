@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync } from "node:fs";
+import { mkdirSync, chmodSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { accountKey, digest, type Config } from "./config.js";
@@ -20,6 +20,11 @@ export interface Source {
 	client_context: string | null;
 }
 export interface QueueRow { id: string; body: string; bytes: number; segment: string }
+
+function fileIdentity(path: string): string | undefined {
+	try { const stat = statSync(path); return `${stat.dev}:${stat.ino}`; }
+	catch { return undefined; }
+}
 
 /** SQLite transactions bind the source cursor to its durable outbox. A crash can
  * replay a record, but cannot advance a cursor past an event that was not queued. */
@@ -74,11 +79,20 @@ export class Store {
 	set(key: string, value: unknown): void {
 		this.db.prepare("INSERT OR REPLACE INTO settings VALUES (?,?)").run(key, JSON.stringify(value));
 	}
+	/** One source per transcript file in a host session. Orca's profile homes reach
+	 * ~/.claude/projects through a symlink, so a session that moves profile reports
+	 * another path for the same file: that path reuses the source and its cursor
+	 * instead of re-reading the file from byte 0. The id scheme is unchanged so that
+	 * existing sources keep their cursors. */
 	source(session: string, path: string, context?: string): Source {
 		const id = digest(JSON.stringify([session, path]));
 		return this.transaction(() => {
 			const existing = this.db.prepare("SELECT * FROM sources WHERE id=?").get(id) as unknown as Source | undefined;
-			if (existing) return existing.sealed ? existing : this.tag(existing, context);
+			if (existing && !existing.sealed) return this.tag(existing, context);
+			const alias = path ? this.alias(session, id, path) : undefined;
+			if (alias) return this.tag(alias, context);
+			// A source sealed by a graph switch stays sealed.
+			if (existing) return existing;
 			const segment = `agent:${randomUUID()}`;
 			this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen,client_context) VALUES (?,?,?,?,?,?)")
 				.run(id, session, path, segment, Date.now(), context ?? null);
@@ -86,11 +100,54 @@ export class Store {
 			return this.db.prepare("SELECT * FROM sources WHERE id=?").get(id) as unknown as Source;
 		});
 	}
+	/** The session's live source for the same file as `path`, by its current path or
+	 * by the identity its last read recorded. When its stored path no longer exists
+	 * (the profile directory it went through was removed), it continues from `path`. */
+	private alias(session: string, id: string, path: string): Source | undefined {
+		const target = fileIdentity(path);
+		if (!target) return undefined;
+		for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC")
+			.all(session, id) as unknown as Source[]) {
+			const current = fileIdentity(source.path);
+			if (current !== target && source.identity !== target) continue;
+			if (current) return source;
+			this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
+			return { ...source, path };
+		}
+		return undefined;
+	}
 	/** Sessions that started before 0.4.1 are labelled on their next hook. */
 	private tag(source: Source, context?: string): Source {
 		if (!context || source.client_context) return source;
 		this.db.prepare("UPDATE sources SET client_context=? WHERE id=?").run(context, source.id);
 		return { ...source, client_context: context };
+	}
+	/** Stores written before 0.4.1 can hold two live sources for one transcript file,
+	 * both polled forever and each uploading every line. Keep the furthest cursor and
+	 * seal the rest the way a graph switch does: their already-queued rows still
+	 * upload and their segments still receive a session-end. Nothing is re-sent. */
+	collapseDuplicateSources(): number {
+		return this.transaction(() => {
+			const sessions = this.db.prepare("SELECT session FROM sources WHERE sealed=0 AND path<>'' GROUP BY session HAVING count(*)>1")
+				.all() as Array<{ session: string }>;
+			let sealed = 0;
+			for (const { session } of sessions) {
+				const groups = new Map<string, Source[]>();
+				for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND sealed=0 AND path<>''").all(session) as unknown as Source[]) {
+					const identity = fileIdentity(source.path);
+					if (identity) groups.set(identity, [...groups.get(identity) ?? [], source]);
+				}
+				for (const group of groups.values()) {
+					const keep = group.reduce((best, source) => source.offset > best.offset ? source : best);
+					for (const source of group.filter(source => source.id !== keep.id)) {
+						this.db.prepare("UPDATE sources SET sealed=1,ended=1,error=NULL,path='' WHERE id=?").run(source.id);
+						this.db.prepare("UPDATE segments SET closed=1 WHERE source=?").run(source.id);
+						sealed++;
+					}
+				}
+			}
+			return sealed;
+		});
 	}
 	sources(): Source[] {
 		return this.db.prepare("SELECT * FROM sources").all() as unknown as Source[];

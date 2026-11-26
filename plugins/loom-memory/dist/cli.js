@@ -31340,7 +31340,7 @@ import { openSync, closeSync, fstatSync, readSync } from "node:fs";
 
 // plugins/loom-memory/src/agent/store.ts
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync } from "node:fs";
+import { mkdirSync, chmodSync, statSync as statSync3 } from "node:fs";
 import { join as join5 } from "node:path";
 import { randomUUID as randomUUID4 } from "node:crypto";
 
@@ -31431,6 +31431,14 @@ function readSettings(home, projectFile) {
 }
 
 // plugins/loom-memory/src/agent/store.ts
+function fileIdentity(path) {
+  try {
+    const stat3 = statSync3(path);
+    return `${stat3.dev}:${stat3.ino}`;
+  } catch {
+    return void 0;
+  }
+}
 var Store = class {
   constructor(home, config2) {
     this.home = home;
@@ -31496,22 +31504,71 @@ var Store = class {
   set(key, value) {
     this.db.prepare("INSERT OR REPLACE INTO settings VALUES (?,?)").run(key, JSON.stringify(value));
   }
+  /** One source per transcript file in a host session. Orca's profile homes reach
+   * ~/.claude/projects through a symlink, so a session that moves profile reports
+   * another path for the same file: that path reuses the source and its cursor
+   * instead of re-reading the file from byte 0. The id scheme is unchanged so that
+   * existing sources keep their cursors. */
   source(session, path, context) {
     const id = digest(JSON.stringify([session, path]));
     return this.transaction(() => {
       const existing = this.db.prepare("SELECT * FROM sources WHERE id=?").get(id);
-      if (existing) return existing.sealed ? existing : this.tag(existing, context);
+      if (existing && !existing.sealed) return this.tag(existing, context);
+      const alias = path ? this.alias(session, id, path) : void 0;
+      if (alias) return this.tag(alias, context);
+      if (existing) return existing;
       const segment = `agent:${randomUUID4()}`;
       this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen,client_context) VALUES (?,?,?,?,?,?)").run(id, session, path, segment, Date.now(), context ?? null);
       this.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(segment, id);
       return this.db.prepare("SELECT * FROM sources WHERE id=?").get(id);
     });
   }
+  /** The session's live source for the same file as `path`, by its current path or
+   * by the identity its last read recorded. When its stored path no longer exists
+   * (the profile directory it went through was removed), it continues from `path`. */
+  alias(session, id, path) {
+    const target = fileIdentity(path);
+    if (!target) return void 0;
+    for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC").all(session, id)) {
+      const current = fileIdentity(source.path);
+      if (current !== target && source.identity !== target) continue;
+      if (current) return source;
+      this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
+      return { ...source, path };
+    }
+    return void 0;
+  }
   /** Sessions that started before 0.4.1 are labelled on their next hook. */
   tag(source, context) {
     if (!context || source.client_context) return source;
     this.db.prepare("UPDATE sources SET client_context=? WHERE id=?").run(context, source.id);
     return { ...source, client_context: context };
+  }
+  /** Stores written before 0.4.1 can hold two live sources for one transcript file,
+   * both polled forever and each uploading every line. Keep the furthest cursor and
+   * seal the rest the way a graph switch does: their already-queued rows still
+   * upload and their segments still receive a session-end. Nothing is re-sent. */
+  collapseDuplicateSources() {
+    return this.transaction(() => {
+      const sessions = this.db.prepare("SELECT session FROM sources WHERE sealed=0 AND path<>'' GROUP BY session HAVING count(*)>1").all();
+      let sealed = 0;
+      for (const { session } of sessions) {
+        const groups = /* @__PURE__ */ new Map();
+        for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND sealed=0 AND path<>''").all(session)) {
+          const identity = fileIdentity(source.path);
+          if (identity) groups.set(identity, [...groups.get(identity) ?? [], source]);
+        }
+        for (const group of groups.values()) {
+          const keep = group.reduce((best, source) => source.offset > best.offset ? source : best);
+          for (const source of group.filter((source2) => source2.id !== keep.id)) {
+            this.db.prepare("UPDATE sources SET sealed=1,ended=1,error=NULL,path='' WHERE id=?").run(source.id);
+            this.db.prepare("UPDATE segments SET closed=1 WHERE source=?").run(source.id);
+            sealed++;
+          }
+        }
+      }
+      return sealed;
+    });
   }
   sources() {
     return this.db.prepare("SELECT * FROM sources").all();
@@ -33501,6 +33558,7 @@ async function drain(store, fetcher = fetch, force = false) {
   try {
     if (!store.config.capture) return;
     await captureLock(store.home, () => {
+      store.collapseDuplicateSources();
       collectAll(store);
       store.closeIdleSegments();
     });
@@ -33852,7 +33910,7 @@ function registerGraphTools(server, routing, fetcher = fetch) {
 // plugins/loom-memory/src/agent/routing.ts
 import { join as join8 } from "node:path";
 import { randomUUID as randomUUID7 } from "node:crypto";
-import { existsSync as existsSync3, statSync as statSync3 } from "node:fs";
+import { existsSync as existsSync3, statSync as statSync4 } from "node:fs";
 var Routing = class {
   constructor(home) {
     this.home = home;
@@ -33988,7 +34046,7 @@ var Routing = class {
           collect(current, source.id);
           const refreshed = current.db.prepare("SELECT * FROM sources WHERE id=?").get(source.id);
           Object.assign(source, refreshed);
-          if (!source.path || !existsSync3(source.path) || source.offset === statSync3(source.path).size) break;
+          if (!source.path || !existsSync3(source.path) || source.offset === statSync4(source.path).size) break;
           if (source.error !== "Catching up with transcript.") throw new Error("Complete or repair the current transcript before switching; its cursor is retained.");
           if (i === 99) throw new Error("Transcript is still catching up. Retry the graph switch shortly.");
         }
@@ -42007,7 +42065,7 @@ function safeJson(text) {
 import { randomUUID as randomUUID8 } from "node:crypto";
 import { open } from "node:fs/promises";
 import { arch, platform, release } from "node:os";
-var VERSION = "0.4.0";
+var VERSION = "0.4.1";
 var MAX_TRANSCRIPT_BYTES = 1536 * 1024;
 var DRAFT_TTL_MS = 24 * 60 * 60 * 1e3;
 var scopeArgs = {
@@ -42214,7 +42272,7 @@ function expose(store, id, refs) {
   });
 }
 function createAgentServer(source, fetcher = fetch, status) {
-  const server = new McpServer({ name: "loom-memory", version: "0.4.0" }, { instructions: SERVER_INSTRUCTIONS });
+  const server = new McpServer({ name: "loom-memory", version: "0.4.1" }, { instructions: SERVER_INSTRUCTIONS });
   const getStore = async (scope) => typeof source === "function" ? source(scope) : source;
   registerBugReportTools(server, getStore, fetcher);
   const memoryFor = (store) => createMemoryClient(store.config.url, { fetch: fetcher });
@@ -43228,7 +43286,7 @@ var RECOVERY_MESSAGE = "The Loom worker stopped responding. Its connection is be
 function createSupervisedServer(workerPath, options = {}) {
   const timeout = options.requestTimeoutMs ?? 3e4;
   const healthTimeout = options.healthTimeoutMs ?? 15e3;
-  const server = new Server({ name: "loom-memory", version: "0.4.0" }, {
+  const server = new Server({ name: "loom-memory", version: "0.4.1" }, {
     capabilities: { tools: {} },
     instructions: SERVER_INSTRUCTIONS
   });
@@ -43277,7 +43335,7 @@ function createSupervisedServer(workerPath, options = {}) {
       });
       let finish;
       const current = {
-        client: new Client({ name: "loom-supervisor", version: "0.4.0" }),
+        client: new Client({ name: "loom-supervisor", version: "0.4.1" }),
         transport,
         exited: new Promise((resolve3) => {
           finish = resolve3;

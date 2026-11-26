@@ -56,7 +56,7 @@ export async function drain(store: Store, fetcher = fetch, force = false): Promi
 	if (!claimed) return;
 	try {
 		if (!store.config.capture) return;
-		await captureLock(store.home, () => { collectAll(store); store.closeIdleSegments(); });
+		await captureLock(store.home, () => { store.collapseDuplicateSources(); collectAll(store); store.closeIdleSegments(); });
 		const state = store.get<DeliveryState>("delivery", { retryAt: 0, failures: 0, lastSuccess: 0 });
 		if (state.retryAt > Date.now()) return;
 		const rows = store.batch();

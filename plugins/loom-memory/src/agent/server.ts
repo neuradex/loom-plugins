@@ -30,7 +30,7 @@ function expose(store: Store, id: string | undefined, refs: string[]): void {
 }
 
 export function createAgentServer(source: Store | ((scope?: Scope) => Promise<Store>), fetcher = fetch, status?: (scope?: Scope) => Promise<unknown>): McpServer {
-	const server = new McpServer({ name: "loom-memory", version: "0.4.0" }, { instructions: SERVER_INSTRUCTIONS });
+	const server = new McpServer({ name: "loom-memory", version: "0.4.1" }, { instructions: SERVER_INSTRUCTIONS });
 	const getStore = async (scope: Scope) => typeof source === "function" ? source(scope) : source;
 	registerBugReportTools(server, getStore, fetcher);
 	const memoryFor = (store: Store) => createMemoryClient(store.config.url, { fetch: fetcher });
