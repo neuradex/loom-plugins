@@ -21,8 +21,10 @@ export interface Source {
 }
 export interface QueueRow { id: string; body: string; bytes: number; segment: string }
 
-function fileIdentity(path: string): string | undefined {
-	try { const stat = statSync(path); return `${stat.dev}:${stat.ino}`; }
+/** `dev:ino` as collect() records it. BigInt stats keep NTFS file ids above 2^53
+ * distinct; below that the string is the same as the one collect() stores. */
+function fileStat(path: string): { identity: string; size: number } | undefined {
+	try { const stat = statSync(path, { bigint: true }); return { identity: `${stat.dev}:${stat.ino}`, size: Number(stat.size) }; }
 	catch { return undefined; }
 }
 
@@ -101,16 +103,17 @@ export class Store {
 		});
 	}
 	/** The session's live source for the same file as `path`, by its current path or
-	 * by the identity its last read recorded. When its stored path no longer exists
-	 * (the profile directory it went through was removed), it continues from `path`. */
+	 * by the identity its last read recorded. When its stored path no longer names
+	 * that file (the profile directory it went through was removed), the source
+	 * follows the file to `path`, so the stored path always names the file its
+	 * cursor describes. */
 	private alias(session: string, id: string, path: string): Source | undefined {
-		const target = fileIdentity(path);
+		const target = fileStat(path)?.identity;
 		if (!target) return undefined;
 		for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC")
 			.all(session, id) as unknown as Source[]) {
-			const current = fileIdentity(source.path);
-			if (current !== target && source.identity !== target) continue;
-			if (current) return source;
+			if (fileStat(source.path)?.identity === target) return source;
+			if (source.identity !== target) continue;
 			this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
 			return { ...source, path };
 		}
@@ -123,22 +126,28 @@ export class Store {
 		return { ...source, client_context: context };
 	}
 	/** Stores written before 0.4.1 can hold two live sources for one transcript file,
-	 * both polled forever and each uploading every line. Keep the furthest cursor and
-	 * seal the rest the way a graph switch does: their already-queued rows still
-	 * upload and their segments still receive a session-end. Nothing is re-sent. */
+	 * both polled forever and each uploading every line. Keep the furthest cursor that
+	 * is valid for the file as it is now, and seal the rest the way a graph switch
+	 * does: rows they already queued still upload and their segments still receive a
+	 * session-end, but no line is read a second time. */
 	collapseDuplicateSources(): number {
 		return this.transaction(() => {
 			const sessions = this.db.prepare("SELECT session FROM sources WHERE sealed=0 AND path<>'' GROUP BY session HAVING count(*)>1")
 				.all() as Array<{ session: string }>;
 			let sealed = 0;
 			for (const { session } of sessions) {
-				const groups = new Map<string, Source[]>();
+				const groups = new Map<string, { size: number; sources: Source[] }>();
 				for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND sealed=0 AND path<>''").all(session) as unknown as Source[]) {
-					const identity = fileIdentity(source.path);
-					if (identity) groups.set(identity, [...groups.get(identity) ?? [], source]);
+					const file = fileStat(source.path);
+					if (file) groups.set(file.identity, { size: file.size, sources: [...groups.get(file.identity)?.sources ?? [], source] });
 				}
-				for (const group of groups.values()) {
-					const keep = group.reduce((best, source) => source.offset > best.offset ? source : best);
+				for (const [identity, { size, sources: group }] of groups) {
+					// A cursor recorded for another generation of the file restarts at byte 0.
+					const rank = (source: Source) => [source.identity === identity && source.offset <= size ? 1 : 0, source.offset] as const;
+					const keep = group.reduce((best, source) => {
+						const [valid, offset] = rank(source); const [bestValid, bestOffset] = rank(best);
+						return valid > bestValid || (valid === bestValid && offset > bestOffset) ? source : best;
+					});
 					for (const source of group.filter(source => source.id !== keep.id)) {
 						this.db.prepare("UPDATE sources SET sealed=1,ended=1,error=NULL,path='' WHERE id=?").run(source.id);
 						this.db.prepare("UPDATE segments SET closed=1 WHERE source=?").run(source.id);

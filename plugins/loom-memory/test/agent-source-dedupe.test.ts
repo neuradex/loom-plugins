@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, symlinkSync, unlinkSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, appendFileSync, rmSync, symlinkSync, unlinkSync, renameSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
@@ -70,6 +70,16 @@ describe("one source per transcript file", () => {
 		collect(store, moved.id);
 		expect(contents(store)).toEqual(["u1", "u2", "u3"]);
 	});
+	it("follows the file when its stored path now names another file", () => {
+		const { store, real, dir } = profiles();
+		writeFileSync(real, line(1));
+		const first = store.source("bot", real); collect(store, first.id);
+		const moved = join(dir, "real", "moved.jsonl");
+		renameSync(real, moved); writeFileSync(real, line(9));
+		expect(store.source("bot", moved)).toMatchObject({ id: first.id, path: moved });
+		appendFileSync(moved, line(2)); collect(store, first.id);
+		expect(contents(store)).toEqual(["u1", "u2"]);
+	});
 	it("does not alias across sessions or to a different file", () => {
 		const { store, a, dir } = profiles();
 		const other = join(dir, "real", "other.jsonl"); writeFileSync(other, "");
@@ -117,6 +127,32 @@ describe("collapsing duplicate sources from earlier versions", () => {
 		const requests: Array<{ path: string; body: any }> = []; await drain(store, successful(requests), true);
 		expect(requests.filter((r) => r.path === "/ingest/session-end").map((r) => r.body.session_id))
 			.toContain(rows[behind]!.segment);
+	});
+	it("prefers a cursor that is valid for the current file over a further one from another generation", () => {
+		const { store, a, b } = profiles();
+		writeFileSync(a, line(1));
+		const valid = legacySource(store, "bot", a); collect(store, valid);
+		store.ack(store.batch());
+		appendFileSync(a, line(2) + line(3));
+		const stale = legacySource(store, "bot", b);
+		store.db.prepare("UPDATE sources SET identity='0:0',offset=? WHERE id=?").run(Buffer.byteLength(line(1) + line(2)), stale);
+		store.collapseDuplicateSources();
+		expect(store.sources().find((source) => !source.sealed)?.id).toBe(valid);
+		collectAll(store);
+		expect(contents(store)).toEqual(["u2", "u3"]);
+	});
+	it("does not keep a cursor past the end of the file", () => {
+		const { store, a, b } = profiles();
+		writeFileSync(a, line(1));
+		const valid = legacySource(store, "bot", a); collect(store, valid);
+		store.ack(store.batch());
+		const beyond = legacySource(store, "bot", b);
+		const { identity } = store.sources().find((source) => source.id === valid)!;
+		store.db.prepare("UPDATE sources SET identity=?,offset=? WHERE id=?").run(identity, 1_000_000, beyond);
+		store.collapseDuplicateSources();
+		expect(store.sources().find((source) => !source.sealed)?.id).toBe(valid);
+		appendFileSync(a, line(2)); collectAll(store);
+		expect(contents(store)).toEqual(["u2"]);
 	});
 	it("runs before polling on every drain, so a pre-0.4.1 pair stops uploading twice", async () => {
 		const { store, a, b } = profiles();

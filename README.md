@@ -23,8 +23,9 @@ homes reach `~/.claude/projects` through a symlink, so a session that moved prof
 a new transcript path; 0.4.0 registered it as a second source, read the file again from the
 start and kept polling both, uploading every line twice. A path that names the same file
 (device and inode) now reuses the session's source and cursor, and an existing duplicate
-pair is collapsed on the next upload, keeping the further cursor so nothing is sent again.
-Lines that 0.4.0 already uploaded twice stay on the server until it removes them.
+pair is collapsed on the next upload, keeping the further valid cursor so no line is read a
+second time. Records that both sources had already queued still upload, and lines that 0.4.0
+already uploaded twice stay on the server until it removes them.
 
 The plugin keeps the host MCP connection in a supervisor and runs capture/tools
 in a replaceable worker. Requests have a 30-second response deadline; an independent
