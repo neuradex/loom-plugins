@@ -1,5 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
-import { mkdirSync, chmodSync } from "node:fs";
+import { mkdirSync, chmodSync, statSync, openSync, closeSync, readSync } from "node:fs";
 import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 import { accountKey, digest, type Config } from "./config.js";
@@ -17,8 +17,49 @@ export interface Episode {
 export interface Source {
 	id: string; session: string; path: string; offset: number; identity: string;
 	segment: string; last_seen: number; ended: number; error: string | null; tail_hash: string; sealed: number;
+	client_context: string | null;
 }
 export interface QueueRow { id: string; body: string; bytes: number; segment: string }
+
+interface FileStat {
+	/** Exact `dev:ino`, from BigInt stats so NTFS ids above 2^53 stay distinct. */
+	identity: string;
+	/** The form collect() stores in sources.identity (numeric stats). It equals
+	 * `identity` below 2^53; above that it is rounded and can name another file. */
+	recorded: string;
+	/** dev and ino are safe integers: no other id rounds to this one's recorded
+	 * form. 2^53 itself is exact but is also what 2^53+1 rounds to. */
+	unambiguous: boolean;
+	size: number;
+}
+function fileStat(path: string): FileStat | undefined {
+	try {
+		const stat = statSync(path, { bigint: true });
+		// Filesystems without stable file ids (SMB, FAT, some FUSE) report ino 0 for
+		// every file; such a path keeps its own source, keyed by path.
+		if (stat.ino === 0n) return undefined;
+		const safe = BigInt(Number.MAX_SAFE_INTEGER);
+		return { identity: `${stat.dev}:${stat.ino}`, recorded: `${Number(stat.dev)}:${Number(stat.ino)}`,
+			unambiguous: stat.dev <= safe && stat.ino <= safe, size: Number(stat.size) };
+	} catch { return undefined; }
+}
+/** Digest of the bytes before a cursor, which collect() records to detect a file
+ * truncated and regrown in place. */
+export function tailHash(fd: number, position: number): string {
+	const tail = Buffer.alloc(Math.min(64, position));
+	readSync(fd, tail, 0, tail.length, position - tail.length);
+	return digest(tail.toString("base64"));
+}
+/** Whether collect() would continue this source's cursor on the file as it is now
+ * rather than restart it at byte 0. */
+function cursorHolds(source: Source, file: FileStat): boolean {
+	if (source.identity !== file.recorded || source.offset > file.size) return false;
+	if (!source.offset || !source.tail_hash) return true;
+	try {
+		const fd = openSync(source.path, "r");
+		try { return tailHash(fd, source.offset) === source.tail_hash; } finally { closeSync(fd); }
+	} catch { return false; }
+}
 
 /** SQLite transactions bind the source cursor to its durable outbox. A crash can
  * replay a record, but cannot advance a cursor past an event that was not queued. */
@@ -48,12 +89,17 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS bug_report_drafts (id TEXT PRIMARY KEY, payload TEXT NOT NULL,
 			 state TEXT NOT NULL, result TEXT, expires INTEGER NOT NULL);
 		`);
-		if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) {
-			try { this.db.exec("ALTER TABLE sources ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0"); }
-			catch (error) { if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) throw error; }
-		}
+		this.addSourceColumn("sealed", "INTEGER NOT NULL DEFAULT 0");
+		this.addSourceColumn("client_context", "TEXT");
 		this.db.exec("CREATE TABLE IF NOT EXISTS project_graphs (graph TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS graph_switches (session TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
+	}
+	/** Concurrent hook processes may open a pre-migration store at the same time. */
+	private addSourceColumn(name: string, definition: string): void {
+		const exists = () => this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === name);
+		if (exists()) return;
+		try { this.db.exec(`ALTER TABLE sources ADD COLUMN ${name} ${definition}`); }
+		catch (error) { if (!exists()) throw error; }
 	}
 	close(): void { this.db.close(); }
 	transaction<T>(fn: () => T): T {
@@ -68,16 +114,82 @@ export class Store {
 	set(key: string, value: unknown): void {
 		this.db.prepare("INSERT OR REPLACE INTO settings VALUES (?,?)").run(key, JSON.stringify(value));
 	}
-	source(session: string, path: string): Source {
+	/** One source per transcript file in a host session. Orca's profile homes reach
+	 * ~/.claude/projects through a symlink, so a session that moves profile reports
+	 * another path for the same file: that path reuses the source and its cursor
+	 * instead of re-reading the file from byte 0. The id scheme is unchanged so that
+	 * existing sources keep their cursors. */
+	source(session: string, path: string, context?: string): Source {
 		const id = digest(JSON.stringify([session, path]));
 		return this.transaction(() => {
 			const existing = this.db.prepare("SELECT * FROM sources WHERE id=?").get(id) as unknown as Source | undefined;
+			if (existing && !existing.sealed) return this.tag(existing, context);
+			const alias = path ? this.alias(session, id, path) : undefined;
+			if (alias) return this.tag(alias, context);
+			// A source sealed by a graph switch stays sealed.
 			if (existing) return existing;
 			const segment = `agent:${randomUUID()}`;
-			this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen) VALUES (?,?,?,?,?)")
-				.run(id, session, path, segment, Date.now());
+			this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen,client_context) VALUES (?,?,?,?,?,?)")
+				.run(id, session, path, segment, Date.now(), context ?? null);
 			this.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(segment, id);
 			return this.db.prepare("SELECT * FROM sources WHERE id=?").get(id) as unknown as Source;
+		});
+	}
+	/** The session's live source for the same file as `path`, by its current path or
+	 * by the identity its last read recorded. When its stored path no longer names
+	 * that file (the profile directory it went through was removed), the source
+	 * follows the file to `path`, so the stored path always names the file its
+	 * cursor describes. */
+	private alias(session: string, id: string, path: string): Source | undefined {
+		const target = fileStat(path);
+		if (!target) return undefined;
+		for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC")
+			.all(session, id) as unknown as Source[]) {
+			if (fileStat(source.path)?.identity === target.identity) return source;
+			// A rounded recorded identity cannot tell this file from its neighbours.
+			if (!target.unambiguous || source.identity !== target.recorded) continue;
+			this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
+			return { ...source, path };
+		}
+		return undefined;
+	}
+	/** Sessions that started before 0.4.1 are labelled on their next hook. */
+	private tag(source: Source, context?: string): Source {
+		if (!context || source.client_context) return source;
+		this.db.prepare("UPDATE sources SET client_context=? WHERE id=?").run(context, source.id);
+		return { ...source, client_context: context };
+	}
+	/** Stores written before 0.4.1 can hold two live sources for one transcript file,
+	 * both polled forever and each uploading every line. Keep the furthest cursor that
+	 * is valid for the file as it is now, and seal the rest the way a graph switch
+	 * does: rows they already queued still upload and their segments still receive a
+	 * session-end, but no line is read a second time. */
+	collapseDuplicateSources(): number {
+		return this.transaction(() => {
+			const sessions = this.db.prepare("SELECT session FROM sources WHERE sealed=0 AND path<>'' GROUP BY session HAVING count(*)>1")
+				.all() as Array<{ session: string }>;
+			let sealed = 0;
+			for (const { session } of sessions) {
+				const groups = new Map<string, { file: FileStat; sources: Source[] }>();
+				for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND sealed=0 AND path<>''").all(session) as unknown as Source[]) {
+					const file = fileStat(source.path);
+					if (file) groups.set(file.identity, { file, sources: [...groups.get(file.identity)?.sources ?? [], source] });
+				}
+				for (const { file, sources: group } of groups.values()) {
+					// A cursor recorded for another generation of the file restarts at byte 0.
+					const rank = (source: Source) => [cursorHolds(source, file) ? 1 : 0, source.offset] as const;
+					const keep = group.reduce((best, source) => {
+						const [valid, offset] = rank(source); const [bestValid, bestOffset] = rank(best);
+						return valid > bestValid || (valid === bestValid && offset > bestOffset) ? source : best;
+					});
+					for (const source of group.filter(source => source.id !== keep.id)) {
+						this.db.prepare("UPDATE sources SET sealed=1,ended=1,error=NULL,path='' WHERE id=?").run(source.id);
+						this.db.prepare("UPDATE segments SET closed=1 WHERE source=?").run(source.id);
+						sealed++;
+					}
+				}
+			}
+			return sealed;
 		});
 	}
 	sources(): Source[] {

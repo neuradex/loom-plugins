@@ -100,10 +100,11 @@ export class Routing {
 					for (const source of change.sources) {
 						const segment = `agent:${randomUUID()}`;
 						next.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(segment, source.id);
-						next.db.prepare(`INSERT INTO sources(id,session,path,offset,identity,tail_hash,segment,last_seen,ended,error,sealed)
-						 VALUES (?,?,?,?,?,?,?,?,0,NULL,1) ON CONFLICT(id) DO UPDATE SET offset=excluded.offset,
-						 path=excluded.path,identity=excluded.identity,tail_hash=excluded.tail_hash,segment=excluded.segment,last_seen=excluded.last_seen,ended=0,checkpoint=0,error=NULL,sealed=1`)
-						 .run(source.id, source.session, source.path, source.offset, source.identity, source.tail_hash, segment, Date.now());
+						next.db.prepare(`INSERT INTO sources(id,session,path,offset,identity,tail_hash,segment,last_seen,ended,error,sealed,client_context)
+						 VALUES (?,?,?,?,?,?,?,?,0,NULL,1,?) ON CONFLICT(id) DO UPDATE SET offset=excluded.offset,
+						 path=excluded.path,identity=excluded.identity,tail_hash=excluded.tail_hash,segment=excluded.segment,last_seen=excluded.last_seen,ended=0,checkpoint=0,error=NULL,sealed=1,
+						 client_context=COALESCE(excluded.client_context,sources.client_context)`)
+						 .run(source.id, source.session, source.path, source.offset, source.identity, source.tail_hash, segment, Date.now(), source.client_context ?? null);
 					}
 					next.set(`switch:${change.id}`, true);
 				});
