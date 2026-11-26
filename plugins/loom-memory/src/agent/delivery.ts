@@ -73,10 +73,12 @@ export async function drain(store: Store, fetcher = fetch, force = false): Promi
 		}
 		// Capture acknowledgements precede segmentation. No session-end request can
 		// overtake an episode in its segment, including after a restart or 429.
-		const ready = store.db.prepare(`SELECT id FROM segments WHERE closed=1 AND finalized=0
+		// Servers before nd-cloud#588 strip the unknown client_context key.
+		const ready = store.db.prepare(`SELECT segments.id AS id, sources.client_context AS context FROM segments
+		 LEFT JOIN sources ON sources.id=segments.source WHERE segments.closed=1 AND segments.finalized=0
 		 AND NOT EXISTS (SELECT 1 FROM outbox WHERE segment=segments.id) LIMIT 1`).get();
 		if (ready) {
-			await api(store, "/ingest/session-end", { session_id: ready.id }, fetcher);
+			await api(store, "/ingest/session-end", { session_id: ready.id, ...(ready.context ? { client_context: ready.context } : {}) }, fetcher);
 			store.db.prepare("UPDATE segments SET finalized=1 WHERE id=?").run(ready.id as string);
 		}
 		if (rows.length || ready) store.set("delivery", { retryAt: 0, failures: 0, lastSuccess: Date.now() });

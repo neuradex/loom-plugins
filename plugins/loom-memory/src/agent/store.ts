@@ -17,6 +17,7 @@ export interface Episode {
 export interface Source {
 	id: string; session: string; path: string; offset: number; identity: string;
 	segment: string; last_seen: number; ended: number; error: string | null; tail_hash: string; sealed: number;
+	client_context: string | null;
 }
 export interface QueueRow { id: string; body: string; bytes: number; segment: string }
 
@@ -48,12 +49,17 @@ export class Store {
 			CREATE TABLE IF NOT EXISTS bug_report_drafts (id TEXT PRIMARY KEY, payload TEXT NOT NULL,
 			 state TEXT NOT NULL, result TEXT, expires INTEGER NOT NULL);
 		`);
-		if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) {
-			try { this.db.exec("ALTER TABLE sources ADD COLUMN sealed INTEGER NOT NULL DEFAULT 0"); }
-			catch (error) { if (!this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === "sealed")) throw error; }
-		}
+		this.addSourceColumn("sealed", "INTEGER NOT NULL DEFAULT 0");
+		this.addSourceColumn("client_context", "TEXT");
 		this.db.exec("CREATE TABLE IF NOT EXISTS project_graphs (graph TEXT PRIMARY KEY); CREATE TABLE IF NOT EXISTS graph_switches (session TEXT PRIMARY KEY, value TEXT NOT NULL)");
 
+	}
+	/** Concurrent hook processes may open a pre-migration store at the same time. */
+	private addSourceColumn(name: string, definition: string): void {
+		const exists = () => this.db.prepare("PRAGMA table_info(sources)").all().some(row => row.name === name);
+		if (exists()) return;
+		try { this.db.exec(`ALTER TABLE sources ADD COLUMN ${name} ${definition}`); }
+		catch (error) { if (!exists()) throw error; }
 	}
 	close(): void { this.db.close(); }
 	transaction<T>(fn: () => T): T {
@@ -68,17 +74,23 @@ export class Store {
 	set(key: string, value: unknown): void {
 		this.db.prepare("INSERT OR REPLACE INTO settings VALUES (?,?)").run(key, JSON.stringify(value));
 	}
-	source(session: string, path: string): Source {
+	source(session: string, path: string, context?: string): Source {
 		const id = digest(JSON.stringify([session, path]));
 		return this.transaction(() => {
 			const existing = this.db.prepare("SELECT * FROM sources WHERE id=?").get(id) as unknown as Source | undefined;
-			if (existing) return existing;
+			if (existing) return existing.sealed ? existing : this.tag(existing, context);
 			const segment = `agent:${randomUUID()}`;
-			this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen) VALUES (?,?,?,?,?)")
-				.run(id, session, path, segment, Date.now());
+			this.db.prepare("INSERT INTO sources(id,session,path,segment,last_seen,client_context) VALUES (?,?,?,?,?,?)")
+				.run(id, session, path, segment, Date.now(), context ?? null);
 			this.db.prepare("INSERT INTO segments(id,source) VALUES (?,?)").run(segment, id);
 			return this.db.prepare("SELECT * FROM sources WHERE id=?").get(id) as unknown as Source;
 		});
+	}
+	/** Sessions that started before 0.4.1 are labelled on their next hook. */
+	private tag(source: Source, context?: string): Source {
+		if (!context || source.client_context) return source;
+		this.db.prepare("UPDATE sources SET client_context=? WHERE id=?").run(context, source.id);
+		return { ...source, client_context: context };
 	}
 	sources(): Source[] {
 		return this.db.prepare("SELECT * FROM sources").all() as unknown as Source[];

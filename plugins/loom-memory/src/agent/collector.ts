@@ -101,6 +101,7 @@ export function appendRecord(store: Store, source: Source, raw: string, offset: 
 				capture_origin: origin, source_session_id: source.session,
 				source_id: source.id, source_offset: offset, record_id: id,
 				record_type: String(record.type ?? "unknown"), part: index + 1, parts: parts.length,
+				...(source.client_context ? { client_context: source.client_context } : {}),
 			},
 			...timestamp,
 		});
