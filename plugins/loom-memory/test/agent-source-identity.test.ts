@@ -5,11 +5,13 @@ import { join } from "node:path";
 import { randomUUID } from "node:crypto";
 
 /** NTFS file ids can exceed 2^53, which tests cannot create on disk. Paths named
- * big-*.jsonl report such an id; collect() would record it rounded. */
+ * big-*.jsonl report such an id; collect() would record it rounded. Paths named
+ * noid-*.jsonl report ino 0, as SMB, FAT and some FUSE filesystems do for every file. */
 const BIG = 9_007_199_254_740_993n;
 vi.mock("node:fs", async (original) => {
 	const fs = await original<typeof import("node:fs")>();
 	const statSync = ((path: string, options?: { bigint?: boolean }) => {
+		if (/noid-\w+\.jsonl$/.test(String(path)) && options?.bigint) return { ...fs.statSync(path, { bigint: true }), dev: 1n, ino: 0n };
 		const match = /big-(\d+)\.jsonl$/.exec(String(path));
 		if (!match || !options?.bigint) return fs.statSync(path, options as never);
 		const real = fs.statSync(path, { bigint: true });
@@ -64,5 +66,25 @@ describe("file ids above 2^53", () => {
 		source(store, "s", path, "0:0", 6);
 		expect(store.collapseDuplicateSources()).toBe(1);
 		expect(store.sources().find((row) => !row.sealed)?.id).toBe(valid);
+	});
+});
+
+describe("filesystems without stable file ids", () => {
+	it("keeps two transcripts of one session apart when both report ino 0", () => {
+		const { store, dir } = fixture();
+		const a = join(dir, "noid-a.jsonl"); const b = join(dir, "noid-b.jsonl");
+		writeFileSync(a, "{}\n"); writeFileSync(b, "{}\n");
+		const first = store.source("s", a);
+		const second = store.source("s", b);
+		expect(second.id).not.toBe(first.id);
+		expect(second.path).toBe(b);
+	});
+	it("does not collapse them", () => {
+		const { store, dir } = fixture();
+		const a = join(dir, "noid-a.jsonl"); const b = join(dir, "noid-b.jsonl");
+		writeFileSync(a, "{}\n"); writeFileSync(b, "{}\n");
+		source(store, "s", a, "1:0", 3); source(store, "s", b, "1:0", 3);
+		expect(store.collapseDuplicateSources()).toBe(0);
+		expect(store.sources().every((row) => !row.sealed)).toBe(true);
 	});
 });

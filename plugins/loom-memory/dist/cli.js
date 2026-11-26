@@ -31434,6 +31434,7 @@ function readSettings(home, projectFile) {
 function fileStat(path) {
   try {
     const stat3 = statSync3(path, { bigint: true });
+    if (stat3.ino === 0n) return void 0;
     const safe = BigInt(Number.MAX_SAFE_INTEGER);
     return {
       identity: `${stat3.dev}:${stat3.ino}`,

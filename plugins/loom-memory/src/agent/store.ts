@@ -35,6 +35,9 @@ interface FileStat {
 function fileStat(path: string): FileStat | undefined {
 	try {
 		const stat = statSync(path, { bigint: true });
+		// Filesystems without stable file ids (SMB, FAT, some FUSE) report ino 0 for
+		// every file; such a path keeps its own source, keyed by path.
+		if (stat.ino === 0n) return undefined;
 		const safe = BigInt(Number.MAX_SAFE_INTEGER);
 		return { identity: `${stat.dev}:${stat.ino}`, recorded: `${Number(stat.dev)}:${Number(stat.ino)}`,
 			unambiguous: stat.dev <= safe && stat.ino <= safe, size: Number(stat.size) };
