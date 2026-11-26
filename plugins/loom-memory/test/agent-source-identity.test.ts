@@ -48,6 +48,14 @@ describe("file ids above 2^53", () => {
 		expect(store.source("s", other).id).not.toBe(existing);
 		expect(store.sources().find((row) => row.id === existing)?.path).toBe(gone);
 	});
+	it("does not move a source whose rounded identity equals another file's exact 2^53 id", () => {
+		const { store, dir } = fixture();
+		const gone = join(dir, "removed.jsonl");
+		const other = join(dir, "big-0.jsonl"); writeFileSync(other, "{}\n");
+		// The source read a file with id 2^53+1, recorded as ROUNDED; big-0 has id exactly 2^53.
+		const existing = source(store, "s", gone, ROUNDED, 3);
+		expect(store.source("s", other).id).not.toBe(existing);
+	});
 	it("ranks a cursor by the identity form collect() recorded", () => {
 		const { store, dir } = fixture();
 		const path = join(dir, "big-1.jsonl"); writeFileSync(path, "{}\n{}\n");

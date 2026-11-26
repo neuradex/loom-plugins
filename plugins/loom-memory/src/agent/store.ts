@@ -27,12 +27,17 @@ interface FileStat {
 	/** The form collect() stores in sources.identity (numeric stats). It equals
 	 * `identity` below 2^53; above that it is rounded and can name another file. */
 	recorded: string;
+	/** dev and ino are safe integers: no other id rounds to this one's recorded
+	 * form. 2^53 itself is exact but is also what 2^53+1 rounds to. */
+	unambiguous: boolean;
 	size: number;
 }
 function fileStat(path: string): FileStat | undefined {
 	try {
 		const stat = statSync(path, { bigint: true });
-		return { identity: `${stat.dev}:${stat.ino}`, recorded: `${Number(stat.dev)}:${Number(stat.ino)}`, size: Number(stat.size) };
+		const safe = BigInt(Number.MAX_SAFE_INTEGER);
+		return { identity: `${stat.dev}:${stat.ino}`, recorded: `${Number(stat.dev)}:${Number(stat.ino)}`,
+			unambiguous: stat.dev <= safe && stat.ino <= safe, size: Number(stat.size) };
 	} catch { return undefined; }
 }
 /** Digest of the bytes before a cursor, which collect() records to detect a file
@@ -139,7 +144,7 @@ export class Store {
 			.all(session, id) as unknown as Source[]) {
 			if (fileStat(source.path)?.identity === target.identity) return source;
 			// A rounded recorded identity cannot tell this file from its neighbours.
-			if (target.recorded !== target.identity || source.identity !== target.recorded) continue;
+			if (!target.unambiguous || source.identity !== target.recorded) continue;
 			this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
 			return { ...source, path };
 		}

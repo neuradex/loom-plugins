@@ -31434,7 +31434,13 @@ function readSettings(home, projectFile) {
 function fileStat(path) {
   try {
     const stat3 = statSync3(path, { bigint: true });
-    return { identity: `${stat3.dev}:${stat3.ino}`, recorded: `${Number(stat3.dev)}:${Number(stat3.ino)}`, size: Number(stat3.size) };
+    const safe = BigInt(Number.MAX_SAFE_INTEGER);
+    return {
+      identity: `${stat3.dev}:${stat3.ino}`,
+      recorded: `${Number(stat3.dev)}:${Number(stat3.ino)}`,
+      unambiguous: stat3.dev <= safe && stat3.ino <= safe,
+      size: Number(stat3.size)
+    };
   } catch {
     return void 0;
   }
@@ -31552,7 +31558,7 @@ var Store = class {
     if (!target) return void 0;
     for (const source of this.db.prepare("SELECT * FROM sources WHERE session=? AND id<>? AND sealed=0 AND path<>'' ORDER BY offset DESC").all(session, id)) {
       if (fileStat(source.path)?.identity === target.identity) return source;
-      if (target.recorded !== target.identity || source.identity !== target.recorded) continue;
+      if (!target.unambiguous || source.identity !== target.recorded) continue;
       this.db.prepare("UPDATE sources SET path=? WHERE id=?").run(path, source.id);
       return { ...source, path };
     }
